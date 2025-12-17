@@ -1,6 +1,47 @@
 <?php
-require_once 'auth_check.php';
+session_start();
+
 require_once 'db.php';
+
+// LOGIQUE D'AUTHENTIFICATION HYBRIDE
+$is_logged_in = false;
+$user_info = null;
+
+// 1. Est-ce qu'on a un cookie JWT ? (Mode Connecté)
+if (isset($_COOKIE['jwt'])) {
+    // On charge le auth_check MAIS on doit modifier auth_check pour ne pas `die()` si échec
+    // Pour simplifier, supposons que tu utilises ton require actuel.
+    // S'il est connecté, on récupère ses infos locales
+    try {
+        require_once 'auth_check.php'; // Cela définit $current_user_id
+        $is_logged_in = true;
+
+        // On charge ses infos depuis project_users
+        $stmt = $pdo->prepare("SELECT * FROM project_users WHERE user_id = ?");
+        $stmt->execute([$current_user_id]);
+        $user_info = $stmt->fetch();
+        
+        // Sécurité : S'il est connecté mais n'a pas fait le setup -> direction setup
+        if (!$user_info) {
+            header("Location: setup.php");
+            exit;
+        }
+
+    } catch (Exception $e) {
+        // Token invalide -> on traite comme invité
+        $is_logged_in = false;
+    }
+} 
+// 2. Sinon, est-ce qu'il a cliqué sur "Mode Invité" ?
+elseif (isset($_GET['guest']) && $_GET['guest'] == 1) {
+    $_SESSION['is_guest'] = true;
+    // Petit message d'avertissement via session flash ou JS
+}
+// 3. Si ni l'un ni l'autre -> retour page d'accueil
+elseif (!isset($_SESSION['is_guest'])) {
+    header("Location: welcome.php");
+    exit;
+}
 
 // 1. Récupération des données pour les listes déroulantes
 $roses = $pdo->query("SELECT * FROM rose_products WHERE is_active = 1")->fetchAll();
@@ -41,22 +82,34 @@ $timeSlots = range(8, 17);
             <div class="row">
                 <div class="col-md-4 mb-2">
                     <label class="form-label">Votre Nom</label>
-                    <input type="text" id="buyer_nom" class="form-control" value="<?php echo htmlspecialchars($current_user_nom); ?>" required>
+                    <input type="text" id="buyer_nom" class="form-control" 
+                        value="<?php echo $is_logged_in ? htmlspecialchars($user_info['nom']) : ''; ?>" 
+                        <?php echo $is_logged_in ? 'readonly style="background-color:#e9ecef;"' : 'required'; ?>>
                 </div>
                 <div class="col-md-4 mb-2">
                     <label class="form-label">Votre Prénom</label>
-                    <input type="text" id="buyer_prenom" class="form-control" value="<?php echo htmlspecialchars($current_user_prenom); ?>" required>
+                    <input type="text" id="buyer_prenom" class="form-control" 
+                        value="<?php echo $is_logged_in ? htmlspecialchars($user_info['prenom']) : ''; ?>" 
+                        <?php echo $is_logged_in ? 'readonly style="background-color:#e9ecef;"' : 'required'; ?>>
                 </div>
                 <div class="col-md-4 mb-2">
                     <label class="form-label">Votre Classe</label>
-                    <select id="buyer_class" class="form-select" required>
-                        <option value="">-- Choisir --</option>
-                        <?php foreach($classes as $c): ?>
-                            <option value="<?php echo $c['id']; ?>" <?php echo (isset($current_user_classe) && $current_user_classe == $c['id']) ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($c['name']); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
+                    <?php if ($is_logged_in): ?>
+                        <?php 
+                            // Petite astuce pour afficher le nom de la classe au lieu de l'ID
+                            $className = "Inconnue";
+                            foreach($classes as $c) { if($c['id'] == $user_info['class_id']) $className = $c['name']; }
+                        ?>
+                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($className); ?>" readonly style="background-color:#e9ecef;">
+                        <input type="hidden" id="buyer_class" value="<?php echo $user_info['class_id']; ?>">
+                    <?php else: ?>
+                        <select id="buyer_class" class="form-select" required>
+                            <option value="">-- Choisir --</option>
+                            <?php foreach($classes as $c): ?>
+                                <option value="<?php echo $c['id']; ?>"><?php echo htmlspecialchars($c['name']); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>

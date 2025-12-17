@@ -36,7 +36,7 @@ try {
     $pdo->beginTransaction();
 
     // ------------------------------------------------------------------
-    // A. Mettre à jour l'utilisateur local (avec ID de CLASSE maintenant)
+    // A. Mettre à jour l'utilisateur local (Optionnel, mais on le garde)
     // ------------------------------------------------------------------
     $stmtUser = $pdo->prepare("
         INSERT INTO project_users (user_id, nom, prenom, class_id) 
@@ -51,7 +51,7 @@ try {
     ]);
 
     // ------------------------------------------------------------------
-    // B. Calculer le total et créer la commande
+    // B. Calculer le total et créer la commande (CORRECTION ICI)
     // ------------------------------------------------------------------
     // On récupère les prix produits
     $products = $pdo->query("SELECT id, price FROM rose_products")->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -65,8 +65,20 @@ try {
         }
     }
 
-    $stmtOrder = $pdo->prepare("INSERT INTO orders (buyer_id, total_price) VALUES (?, ?)");
-    $stmtOrder->execute([$current_user_id, $totalOrder]);
+    // C'EST ICI QUE J'AI AJOUTÉ LES COLONNES MANQUANTES :
+    $stmtOrder = $pdo->prepare("
+        INSERT INTO orders (buyer_id, buyer_nom, buyer_prenom, buyer_class_id, total_price) 
+        VALUES (?, ?, ?, ?, ?)
+    ");
+    
+    $stmtOrder->execute([
+        $current_user_id, // On garde l'ID technique
+        $buyerNom,        // Le nom saisi dans le formulaire
+        $buyerPrenom,     // Le prénom saisi
+        $buyerClassId,    // L'ID de la classe choisie
+        $totalOrder       // Le prix total
+    ]);
+    
     $orderId = $pdo->lastInsertId();
 
     // ------------------------------------------------------------------
@@ -78,7 +90,9 @@ try {
         VALUES (?, ?, ?, ?, ?, ?)
     ");
     
-    // Prépa pour les roses
+    // Prépa pour les roses (Attention au nom de colonne corrigé : rose_product_id)
+    // Note : Vérifie que ta table s'appelle bien rose_product_id ou rose_id ici.
+    // D'après ton DESCRIBE précédent, c'était rose_product_id.
     $stmtRose = $pdo->prepare("INSERT INTO recipient_roses (recipient_id, rose_product_id, quantity) VALUES (?,?,?)");
     
     // Prépa pour l'emploi du temps
@@ -105,13 +119,13 @@ try {
             }
         }
 
-        // 3. Son emploi du temps (Nouveauté)
+        // 3. Son emploi du temps
         if (isset($dest['schedule']) && is_array($dest['schedule'])) {
             foreach ($dest['schedule'] as $slot) {
                 $stmtSchedule->execute([
                     $destId,
-                    $slot['hour'],   // ex: 8
-                    $slot['roomId']  // ex: 5
+                    $slot['hour'],   
+                    $slot['roomId']  
                 ]);
             }
         }
@@ -122,7 +136,6 @@ try {
 
 } catch (Exception $e) {
     $pdo->rollBack();
-    // On log l'erreur serveur pour toi (regarde /var/log/apache2/error.log)
     error_log("ERREUR SQL ST VALENTIN : " . $e->getMessage());
     sendError('Erreur interne serveur. Contactez le CVL.');
 }
