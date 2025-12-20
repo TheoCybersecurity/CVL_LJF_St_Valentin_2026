@@ -37,8 +37,15 @@ if (isset($_COOKIE['jwt'])) {
                 </a>
             </div>
             
+            <?php 
+                $target = 'https://cvl-ljf-st-valentin-2026.projets.marescal.fr/setup.php';
+                $encoded_target = base64_encode($target);
+            ?>
+
             <div class="mt-4 pt-3 border-top">
-                <p class="small text-muted">Déjà un compte ? <a href="https://projets.marescal.fr/index.php?redirect=https://cvl-ljf-st-valentin-2026.projets.marescal.fr/setup.php">Connexion</a></p>
+                <p class="small text-muted">Déjà un compte ? 
+                    <a href="https://auth.projets.marescal.fr/index.php?redirect=<?php echo $encoded_target; ?>">Connexion</a>
+                </p>
             </div>
         </div>
     </div>
