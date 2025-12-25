@@ -1,56 +1,44 @@
 <?php
 session_start();
-
 require_once 'db.php';
 
-// LOGIQUE D'AUTHENTIFICATION HYBRIDE
+// --- VERIFICATION AUTH ---
 $is_logged_in = false;
 $user_info = null;
 
-// 1. Est-ce qu'on a un cookie JWT ? (Mode Connecté)
+// On vérifie le cookie JWT
 if (isset($_COOKIE['jwt'])) {
-    // On charge le auth_check MAIS on doit modifier auth_check pour ne pas `die()` si échec
-    // Pour simplifier, supposons que tu utilises ton require actuel.
-    // S'il est connecté, on récupère ses infos locales
     try {
-        require_once 'auth_check.php'; // Cela définit $current_user_id
+        require_once 'auth_check.php';
         $is_logged_in = true;
-
-        // On charge ses infos depuis project_users
+        // Récup infos
         $stmt = $pdo->prepare("SELECT * FROM project_users WHERE user_id = ?");
         $stmt->execute([$current_user_id]);
         $user_info = $stmt->fetch();
-        
-        // Sécurité : S'il est connecté mais n'a pas fait le setup -> direction setup
-        if (!$user_info) {
-            header("Location: setup.php");
-            exit;
-        }
-
     } catch (Exception $e) {
-        // Token invalide -> on traite comme invité
         $is_logged_in = false;
     }
-} 
-// 2. Sinon, est-ce qu'il a cliqué sur "Mode Invité" ?
-elseif (isset($_GET['guest']) && $_GET['guest'] == 1) {
-    $_SESSION['is_guest'] = true;
-    // Petit message d'avertissement via session flash ou JS
 }
-// 3. Si ni l'un ni l'autre -> retour page d'accueil
-elseif (!isset($_SESSION['is_guest'])) {
+
+// Si pas connecté -> Redirection vers l'accueil pour choisir (Connexion ou Invité)
+if (!$is_logged_in) {
     header("Location: welcome.php");
     exit;
 }
 
-// 1. Récupération des données pour les listes déroulantes
-$roses = $pdo->query("SELECT * FROM rose_products WHERE is_active = 1")->fetchAll();
-$messages = $pdo->query("SELECT * FROM predefined_messages")->fetchAll();
-$classes = $pdo->query("SELECT * FROM classes ORDER BY name ASC")->fetchAll();
-$rooms = $pdo->query("SELECT * FROM rooms ORDER BY name ASC")->fetchAll();
-
-// Créneaux horaires (8h à 17h -> fin à 18h)
-$timeSlots = range(8, 17); 
+// --- RECUPERATION DES COMMANDES ---
+// On récupère les commandes + le nombre de destinataires pour chaque commande
+$sql = "
+    SELECT o.*, COUNT(r.id) as total_recipients 
+    FROM orders o
+    LEFT JOIN order_recipients r ON o.id = r.order_id
+    WHERE o.user_id = ? 
+    GROUP BY o.id 
+    ORDER BY o.created_at DESC
+";
+$stmt = $pdo->prepare($sql);
+$stmt->execute([$current_user_id]);
+$orders = $stmt->fetchAll();
 ?>
 
 <!DOCTYPE html>
@@ -58,177 +46,171 @@ $timeSlots = range(8, 17);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Saint Valentin - CVL</title>
+    <title>Mes Commandes - St Valentin</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="assets/css/style.css?v=<?php echo time(); ?>" rel="stylesheet">
-    <style>
-        .rose-card { border-left: 4px solid #d63384; background-color: #fff0f6; }
-        .total-box { font-size: 1.5rem; font-weight: bold; color: #d63384; }
-        .schedule-row { font-size: 0.9rem; }
-    </style>
+    <link href="assets/css/style.css" rel="stylesheet">
 </head>
 <body class="bg-light">
 
+<?php include 'navbar.php'; ?>
+
 <div class="container py-5">
-    <div class="text-center mb-5">
-        <h1 class="display-4 text-danger">🌹 Opération Saint-Valentin</h1>
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <h1 class="display-6">Mon Tableau de Bord</h1>
+            <p class="text-muted">Retrouvez ici l'historique de vos achats.</p>
+        </div>
+        <div class="col-md-4 text-end">
+            <a href="order.php" class="btn btn-danger btn-lg shadow">
+                + Nouvelle commande
+            </a>
+        </div>
     </div>
 
-    <div class="card mb-4 shadow-sm">
-        <div class="card-header bg-danger text-white">
-            <h5 class="mb-0">1. Vos informations (Acheteur)</h5>
+    <?php if (empty($orders)): ?>
+        <div class="alert alert-info text-center py-5">
+            <h4>Vous n'avez passé aucune commande pour le moment.</h4>
+            <p>C'est le moment de faire plaisir à vos proches !</p>
+            <a href="order.php" class="btn btn-primary mt-3">Commencer</a>
         </div>
-        <div class="card-body">
-            <div class="row">
-                <div class="col-md-4 mb-2">
-                    <label class="form-label">Votre Nom</label>
-                    <input type="text" id="buyer_nom" class="form-control" 
-                        value="<?php echo $is_logged_in ? htmlspecialchars($user_info['nom']) : ''; ?>" 
-                        <?php echo $is_logged_in ? 'readonly style="background-color:#e9ecef;"' : 'required'; ?>>
-                </div>
-                <div class="col-md-4 mb-2">
-                    <label class="form-label">Votre Prénom</label>
-                    <input type="text" id="buyer_prenom" class="form-control" 
-                        value="<?php echo $is_logged_in ? htmlspecialchars($user_info['prenom']) : ''; ?>" 
-                        <?php echo $is_logged_in ? 'readonly style="background-color:#e9ecef;"' : 'required'; ?>>
-                </div>
-                <div class="col-md-4 mb-2">
-                    <label class="form-label">Votre Classe</label>
-                    <?php if ($is_logged_in): ?>
-                        <?php 
-                            // Petite astuce pour afficher le nom de la classe au lieu de l'ID
-                            $className = "Inconnue";
-                            foreach($classes as $c) { if($c['id'] == $user_info['class_id']) $className = $c['name']; }
-                        ?>
-                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($className); ?>" readonly style="background-color:#e9ecef;">
-                        <input type="hidden" id="buyer_class" value="<?php echo $user_info['class_id']; ?>">
-                    <?php else: ?>
-                        <select id="buyer_class" class="form-select" required>
-                            <option value="">-- Choisir --</option>
-                            <?php foreach($classes as $c): ?>
-                                <option value="<?php echo $c['id']; ?>"><?php echo htmlspecialchars($c['name']); ?></option>
+    <?php else: ?>
+        <div class="card shadow-sm border-0">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-4">N° Commande</th>
+                                <th>Date</th>
+                                <th>Destinataires</th>
+                                <th>Montant</th>
+                                <th>Statut</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($orders as $order): ?>
+                                <tr>
+                                    <td class="ps-4 fw-bold">#<?php echo str_pad($order['id'], 4, '0', STR_PAD_LEFT); ?></td>
+                                    <td><?php echo date('d/m/Y à H:i', strtotime($order['created_at'])); ?></td>
+                                    <td>
+                                        <span class="badge bg-secondary rounded-pill">
+                                            <?php echo $order['total_recipients']; ?> personne(s)
+                                        </span>
+                                    </td>
+                                    <td class="fw-bold text-success"><?php echo number_format($order['total_price'], 2); ?> €</td>
+                                    <td>
+                                        <?php if ($order['is_paid']): ?>
+                                            <span class="badge bg-success">Payé ✅</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-warning text-dark">En attente ⏳</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <button class="btn btn-sm btn-info text-white" onclick="showOrderDetails(<?php echo $order['id']; ?>)">
+                                            ℹ️ Détails
+                                        </button>
+                                    </td>
+                                </tr>
                             <?php endforeach; ?>
-                        </select>
-                    <?php endif; ?>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
-    </div>
-
-    <div class="card mb-4 shadow-sm">
-        <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center">
-            <h5 class="mb-0">2. Vos Destinataires</h5>
-            <button type="button" class="btn btn-light btn-sm text-danger fw-bold" data-bs-toggle="modal" data-bs-target="#addRecipientModal">+ Ajouter</button>
-        </div>
-        <div class="card-body">
-            <div id="empty-cart-msg" class="text-center text-muted py-4">Aucun destinataire. Cliquez sur "+ Ajouter".</div>
-            <div id="recipients-list" class="row g-3"></div>
-        </div>
-        <div class="card-footer bg-white">
-            <div class="d-flex justify-content-between align-items-center">
-                <span>Personnes : <strong id="count-people">0</strong></span>
-                <span class="total-box">Total : <span id="grand-total">0.00</span> €</span>
-            </div>
-        </div>
-    </div>
-
-    <div class="d-grid gap-2">
-        <button id="btn-validate-order" class="btn btn-success btn-lg" disabled>✅ Valider la commande</button>
-    </div>
+    <?php endif; ?>
 </div>
 
-<div class="modal fade" id="addRecipientModal" tabindex="-1">
+<div class="modal fade" id="orderDetailsModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title">Nouveau Destinataire</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            <div class="modal-header">
+                <h5 class="modal-title">Détails de la commande #<span id="modal-order-id"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
             </div>
-            <div class="modal-body">
-                <form id="recipientForm">
-                    <div class="row mb-3">
-                        <div class="col-md-4">
-                            <label>Nom</label>
-                            <input type="text" class="form-control" id="dest_nom" required>
-                        </div>
-                        <div class="col-md-4">
-                            <label>Prénom</label>
-                            <input type="text" class="form-control" id="dest_prenom" required>
-                        </div>
-                        <div class="col-md-4">
-                            <label>Classe</label>
-                            <select id="dest_classe" class="form-select" required>
-                                <option value="">-- Choisir --</option>
-                                <?php foreach($classes as $c): ?>
-                                    <option value="<?php echo $c['id']; ?>"><?php echo htmlspecialchars($c['name']); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                    </div>
-
-                    <hr>
-
-                    <h6 class="mb-2 fw-bold text-primary">📍 Où trouver cette personne le Vendredi 13 ?</h6>
-                    <p class="small text-muted mb-3">Renseignez au moins un créneau.</p>
-                    
-                    <div class="row g-2 bg-light p-2 rounded border mb-3">
-                        <?php foreach($timeSlots as $hour): ?>
-                        <div class="col-md-6 schedule-row d-flex align-items-center">
-                            <span class="fw-bold me-2" style="width: 80px;"><?php echo $hour.'h - '.($hour+1).'h'; ?> :</span>
-                            <select class="form-select form-select-sm schedule-input" data-hour="<?php echo $hour; ?>">
-                                <option value="">(Je ne sais pas / Pas de cours)</option>
-                                <?php foreach($rooms as $r): ?>
-                                    <option value="<?php echo $r['id']; ?>"><?php echo htmlspecialchars($r['name']); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <?php endforeach; ?>
-                    </div>
-
-                    <hr>
-
-                    <h6 class="mb-3">💐 Fleurs</h6>
-                    <?php foreach ($roses as $rose): ?>
-                    <div class="row align-items-center mb-2">
-                        <div class="col-6"><strong><?php echo htmlspecialchars($rose['name']); ?></strong> (<?php echo number_format($rose['price'], 2); ?> €)</div>
-                        <div class="col-4"><input type="number" class="form-control rose-input" data-id="<?php echo $rose['id']; ?>" data-name="<?php echo htmlspecialchars($rose['name']); ?>" data-price="<?php echo $rose['price']; ?>" value="0" min="0"></div>
-                    </div>
-                    <?php endforeach; ?>
-
-                    <div class="mb-3 mt-3">
-                        <label>💌 Message</label>
-                        <select class="form-select" id="dest_message">
-                            <option value="">(Aucun message)</option>
-                            <?php foreach ($messages as $msg): ?>
-                                <option value="<?php echo $msg['id']; ?>"><?php echo htmlspecialchars($msg['content']); ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" id="dest_anonyme">
-                        <label class="form-check-label" for="dest_anonyme">🕵️ Offrir anonymement ?</label>
-                    </div>
-                </form>
+            <div class="modal-body" id="modal-order-content">
+                <div class="text-center"><div class="spinner-border" role="status"></div></div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
-                <button type="button" class="btn btn-danger" onclick="addRecipientToCart()">Ajouter</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fermer</button>
             </div>
         </div>
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const classesMap = <?php 
-        $map = []; foreach($classes as $c) $map[$c['id']] = $c['name'];
-        echo json_encode($map); 
-    ?>;
-    const roomsMap = <?php 
-        $map = []; foreach($rooms as $r) $map[$r['id']] = $r['name'];
-        echo json_encode($map); 
-    ?>;
+function showOrderDetails(orderId) {
+    const modalContent = document.getElementById('modal-order-content');
+    const modalOrderId = document.getElementById('modal-order-id');
+    
+    // 1. Ouvrir la modale et afficher un chargement
+    modalOrderId.innerText = orderId;
+    modalContent.innerHTML = '<div class="text-center py-3"><div class="spinner-border text-danger" role="status"></div><br>Chargement...</div>';
+    
+    const myModal = new bootstrap.Modal(document.getElementById('orderDetailsModal'));
+    myModal.show();
+
+    // 2. Appel API
+    fetch(`api/get_order_details?id=${orderId}`)
+    .then(response => response.json())
+    .then(data => {
+        if (!data.success) {
+            modalContent.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+            return;
+        }
+
+        // 3. Construction du HTML
+        let html = `
+            <div class="d-flex justify-content-between mb-3 border-bottom pb-2">
+                <strong>Date: ${data.order.created_at}</strong>
+                <strong class="text-danger fs-5">Total: ${parseFloat(data.order.total_price).toFixed(2)} €</strong>
+            </div>
+            <h5>Destinataires (${data.recipients.length}) :</h5>
+            <div class="list-group">
+        `;
+
+        data.recipients.forEach(dest => {
+            // Liste des roses
+            let rosesHtml = dest.roses.map(r => 
+                `<span class="badge bg-danger me-1">${r.quantity} x ${r.name}</span>`
+            ).join('');
+
+            // Liste planning
+            let scheduleHtml = dest.schedule.map(s => 
+                `<small class="d-block text-muted">🕒 ${s.hour_slot}h - ${parseInt(s.hour_slot)+1}h : ${s.room_name}</small>`
+            ).join('');
+
+            // Badge anonyme
+            let anonBadge = dest.is_anonymous == 1 ? '<span class="badge bg-dark ms-2">Anonyme</span>' : '';
+
+            html += `
+                <div class="list-group-item">
+                    <div class="d-flex w-100 justify-content-between">
+                        <h6 class="mb-1 fw-bold">
+                            ${dest.dest_prenom} ${dest.dest_nom} <small class="text-muted">(${dest.class_id})</small>
+                            ${anonBadge}
+                        </h6>
+                    </div>
+                    <div class="mb-2">${rosesHtml}</div>
+                    <p class="mb-1 small fst-italic">✉️ Message : "${dest.message_text || 'Aucun message'}"</p>
+                    <div class="mt-2 border-top pt-1">
+                        <strong>📍 Localisation :</strong>
+                        ${scheduleHtml || '<span class="text-danger small">Aucune salle définie</span>'}
+                    </div>
+                </div>
+            `;
+        });
+
+        html += '</div>'; // Fin list-group
+        modalContent.innerHTML = html;
+    })
+    .catch(err => {
+        console.error(err);
+        modalContent.innerHTML = '<div class="alert alert-danger">Erreur technique lors du chargement.</div>';
+    });
+}
 </script>
-<script src="assets/js/main.js?v=<?php echo time(); ?>"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

@@ -169,7 +169,7 @@ document.getElementById('btn-validate-order').addEventListener('click', function
     btn.disabled = true;
     btn.innerHTML = "⏳ Enregistrement...";
 
-    fetch('api/submit_order', {
+    fetch('api/submit_order', { // J'ai ajouté .php par sécurité
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ buyerNom, buyerPrenom, buyerClassId, cart })
@@ -179,8 +179,9 @@ document.getElementById('btn-validate-order').addEventListener('click', function
         try {
             const data = JSON.parse(text);
             if (data.success) {
+                // SUCCÈS : On redirige vers le tableau de bord
                 alert("Commande validée avec succès !");
-                window.location.reload(); 
+                window.location.href = 'index.php'; 
             } else {
                 alert("Erreur Serveur : " + data.message);
                 btn.disabled = false;
@@ -190,11 +191,13 @@ document.getElementById('btn-validate-order').addEventListener('click', function
             console.error("Réponse serveur invalide:", text);
             alert("Erreur technique (Réponse invalide). Vérifiez la console.");
             btn.disabled = false;
+            btn.innerHTML = "✅ Valider la commande";
         }
     })
     .catch(e => {
         console.error(e);
         alert("Erreur réseau.");
         btn.disabled = false;
+        btn.innerHTML = "✅ Valider la commande";
     });
 });

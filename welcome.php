@@ -32,7 +32,7 @@ if (isset($_COOKIE['jwt'])) {
                     ✨ Créer un compte <br><small style="font-size:0.7em">(Suivi des commandes inclus)</small>
                 </a>
 
-                <a href="index.php?guest=1" class="btn btn-outline-secondary">
+                <a href="order.php?guest=1" class="btn btn-outline-secondary">
                     👤 Continuer en tant qu'invité <br><small style="font-size:0.7em">(Pas d'historique)</small>
                 </a>
             </div>
