@@ -3,6 +3,8 @@
 require_once 'auth_check.php'; // On s'assure qu'on est connecté
 require_once 'db.php';
 
+checkAccess('admin');
+
 // --- CONFIGURATION ---
 // Liste des tables qu'on a le droit de vider
 $tables_config = [

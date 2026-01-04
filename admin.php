@@ -3,6 +3,8 @@
 require_once 'db.php';
 require_once 'auth_check.php'; 
 
+checkAccess('cvl');
+
 // --- 1. Récupération des STATS ---
 $totalRevenue = $pdo->query("SELECT SUM(total_price) FROM orders")->fetchColumn() ?: 0;
 $totalRoses = $pdo->query("SELECT SUM(quantity) FROM recipient_roses")->fetchColumn() ?: 0;
