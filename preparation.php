@@ -210,7 +210,7 @@ foreach ($rawResults as $row) {
                                                 <?php if($item['is_anonymous']): ?>
                                                     <i class="fas fa-user-secret" title="Anonyme"></i> <span class="d-none d-md-inline">Anonyme</span>
                                                 <?php else: ?>
-                                                    De : <strong><?php echo htmlspecialchars($item['buyer_prenom']); ?></strong>
+                                                    De : <strong><?php echo htmlspecialchars($item['buyer_prenom']) . ' ' . htmlspecialchars($item['buyer_nom']); ?></strong>
                                                 <?php endif; ?>
                                             </small>
                                         </div>
