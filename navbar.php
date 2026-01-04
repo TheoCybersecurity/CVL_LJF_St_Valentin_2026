@@ -78,7 +78,7 @@ if ($nav_user_id) {
 
         <?php else: ?>
             <li class="nav-item">
-                <a href="login.php" class="btn btn-light ms-2">Connexion</a>
+                <a href="https://auth.projets.marescal.fr/" class="btn btn-light ms-2">Connexion</a>
             </li>
         <?php endif; ?>
         

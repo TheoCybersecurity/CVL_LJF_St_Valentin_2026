@@ -6,6 +6,10 @@ require_once 'db.php';
 $is_logged_in = false;
 $user_info = null;
 
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
 // On vérifie le cookie JWT
 if (isset($_COOKIE['jwt'])) {
     try {
@@ -17,6 +21,16 @@ if (isset($_COOKIE['jwt'])) {
         $user_info = $stmt->fetch();
     } catch (Exception $e) {
         $is_logged_in = false;
+        session_unset();
+        session_destroy();
+    }
+} else {
+    $is_logged_in = false;
+
+    if (isset($_SESSION['user_id']) || isset($_SESSION['prenom'])) {
+        session_unset();
+        session_destroy();
+        session_start(); 
     }
 }
 
