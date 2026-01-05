@@ -13,11 +13,14 @@ require '/var/www/config/vendor/autoload.php';
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 
+$project_name = 'CVL_LJF_St_Valentin_2026';
+
 // --- FONCTION DE NETTOYAGE ---
 // Si l'auth échoue, on nettoie TOUT avant de montrer la page de transition
 function triggerLogoutAndExit() {
     session_unset();     // Vide les variables $_SESSION
     session_destroy();   // Détruit le fichier de session côté serveur
+    global $project_name;
     include('/var/www/html/common_errors/transition.php');
     exit;
 }

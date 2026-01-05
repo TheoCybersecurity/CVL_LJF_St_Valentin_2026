@@ -270,7 +270,11 @@ foreach ($raw_results as $row) {
         </div>
     </div>
 
-    <div class="d-flex gap-2 mb-4">
+    <div class="d-flex gap-3 mb-4">
+        <a href="preparation.php" class="btn btn-lg btn-primary fw-bold shadow-sm flex-grow-1">
+            <i class="fas fa-boxes"></i> Mode Préparation
+        </a>
+
         <a href="delivery.php" class="btn btn-lg btn-success fw-bold shadow-sm flex-grow-1">
             <i class="fas fa-truck"></i> Mode Distribution
         </a>
