@@ -1,7 +1,6 @@
 <?php
 // toast_notifications.php
 
-// On vérifie si on doit afficher quelque chose
 if (isset($_GET['last_action'], $_GET['last_ids'])): 
     $lastAction = $_GET['last_action'];
     $lastIds = htmlspecialchars($_GET['last_ids']);
@@ -87,9 +86,22 @@ if (isset($_GET['last_action'], $_GET['last_ids'])):
     document.addEventListener('DOMContentLoaded', function () {
         var toastEl = document.getElementById('undoToast');
         if (toastEl) {
-            // Assure-toi que Bootstrap JS est chargé sur la page parente
             var toast = new bootstrap.Toast(toastEl, { delay: 10000 });
             toast.show();
+
+            // --- NOUVEAU : Nettoyage de l'URL à la fermeture ---
+            // On écoute l'événement Bootstrap "hidden.bs.toast" (quand le toast a fini de disparaître)
+            toastEl.addEventListener('hidden.bs.toast', function () {
+                // On récupère l'URL actuelle
+                var url = new URL(window.location.href);
+                
+                // On supprime les paramètres gênants
+                url.searchParams.delete('last_action');
+                url.searchParams.delete('last_ids');
+                
+                // On met à jour la barre d'adresse sans recharger la page
+                window.history.replaceState({}, '', url);
+            });
         }
     });
 </script>

@@ -1,0 +1,146 @@
+/* assets/css/style.css */
+
+/* --- GENERAL --- */
+body {
+    background-color: #f8f9fa; /* Gris très clair pour le fond de page */
+}
+
+/* --- BADGES ROSES --- */
+.badge-rose-rouge { background-color: #dc3545; color: white; }
+.badge-rose-blanche { background-color: #ffffff; color: #212529; border: 1px solid #ced4da; }
+.badge-rose-pink { background-color: #ffc2d1; color: #880e4f; }
+
+/* --- BOUTON DETAILS --- */
+.btn-details {
+    background-color: white;
+    border: 1px solid #dee2e6;
+    color: #495057;
+    border-radius: 50px;
+    padding: 5px 15px;
+    font-weight: 600;
+    transition: all 0.2s;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    text-decoration: none; /* Important pour les liens */
+}
+
+.btn-details:hover {
+    background-color: #f8f9fa;
+    border-color: #c1c9d0;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    color: #212529;
+}
+
+/* --- TIMELINE (STEPPER) CORRECTIF --- */
+.stepper-wrapper {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    margin-top: 10px;
+    position: relative;
+}
+
+.stepper-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+}
+
+/* La ligne grise (par défaut) */
+.stepper-item::before {
+    position: absolute;
+    content: "";
+    border-bottom: 2px solid #e0e0e0;
+    width: 100%;
+    top: 15px; /* Doit être exactement au milieu de la hauteur du rond (30px / 2) */
+    left: -50%;
+    z-index: 1; /* La ligne est TOUT EN BAS */
+}
+
+/* Le premier item n'a pas de ligne avant lui */
+.stepper-item:first-child::before {
+    content: none;
+}
+
+/* Le rond (Compteur) */
+.step-counter {
+    position: relative;
+    z-index: 5; /* Le rond est AU-DESSUS de la ligne */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #fff; /* OBLIGATOIRE : Fond blanc pour cacher la ligne dessous */
+    border: 2px solid #e0e0e0;
+    color: #e0e0e0;
+    margin-bottom: 6px;
+    font-size: 12px;
+    transition: all 0.3s ease;
+}
+
+.step-name {
+    font-size: 0.75rem;
+    color: #6c757d;
+    font-weight: 600;
+    text-align: center;
+}
+
+/* --- ETAT ACTIVE / COMPLETED --- */
+.stepper-item.completed .step-counter {
+    background-color: #198754;
+    border-color: #198754;
+    color: white;
+    z-index: 6; /* Reste au dessus */
+}
+
+.stepper-item.completed::before {
+    border-color: #198754; /* La ligne devient verte */
+    z-index: 2; /* Passe au dessus de la ligne grise standard */
+}
+
+.stepper-item.completed .step-name {
+    color: #198754;
+}
+
+/* Animation pour l'apparition des nouvelles lignes */
+@keyframes slideDownFade {
+    from {
+        opacity: 0;
+        transform: translateY(-10px); /* Part d'un peu plus haut */
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0); /* Arrive à sa place normale */
+    }
+}
+
+.new-row-anim {
+    animation: slideDownFade 0.3s ease-out forwards;
+}
+
+/* Animation de suppression */
+@keyframes slideUpFadeOut {
+    0% {
+        opacity: 1;
+        transform: translateY(0);
+        max-height: 50px; /* Hauteur approximative d'une ligne */
+        margin-bottom: 0.5rem;
+    }
+    100% {
+        opacity: 0;
+        transform: translateY(-20px); /* Monte un peu vers le haut */
+        max-height: 0; /* Réduit l'espace pris */
+        margin-bottom: 0;
+        padding: 0;
+        border: none;
+    }
+}
+
+.removing-row {
+    animation: slideUpFadeOut 0.3s ease-in forwards;
+    overflow: hidden; /* Indispensable pour l'effet de fermeture */
+}

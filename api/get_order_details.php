@@ -34,12 +34,16 @@ try {
         exit;
     }
 
-    // 3. Récupérer les destinataires
-    // CORRECTION ICI : on remplace 'messages' par 'predefined_messages'
+    // 3. Récupérer les destinataires ET le nom de leur classe
+    // MODIFICATION ICI : On ajoute c.name (alias class_name) et le LEFT JOIN classes
     $stmtDest = $pdo->prepare("
-        SELECT r.*, m.content as message_text 
+        SELECT 
+            r.*, 
+            m.content as message_text,
+            c.name as class_name 
         FROM order_recipients r 
         LEFT JOIN predefined_messages m ON r.message_id = m.id 
+        LEFT JOIN classes c ON r.class_id = c.id
         WHERE r.order_id = ?
     ");
     $stmtDest->execute([$orderId]);
@@ -69,10 +73,15 @@ try {
         $dest['schedule'] = $stmtSched->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    // 5. Récupérer TOUTES les salles pour le mode édition
+    $stmtAllRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name ASC");
+    $allRooms = $stmtAllRooms->fetchAll(PDO::FETCH_ASSOC);
+
     echo json_encode([
         'success' => true,
         'order' => $order,
-        'recipients' => $recipients
+        'recipients' => $recipients,
+        'all_rooms' => $allRooms
     ]);
 
 } catch (Exception $e) {
