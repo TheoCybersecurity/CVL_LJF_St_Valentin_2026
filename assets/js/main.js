@@ -181,7 +181,7 @@ document.getElementById('btn-validate-order').addEventListener('click', function
             if (data.success) {
                 // SUCCÈS : On redirige vers le tableau de bord
                 alert("Commande validée avec succès !");
-                window.location.href = 'index.php'; 
+                window.location.href = 'index.php?msg_success=Votre commande a bien été enregistrée !'; 
             } else {
                 alert("Erreur Serveur : " + data.message);
                 btn.disabled = false;

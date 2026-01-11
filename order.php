@@ -37,7 +37,7 @@ else {
 
 // --- CHARGEMENT DES DONNÉES ---
 $roses = $pdo->query("SELECT * FROM rose_products WHERE is_active = 1")->fetchAll();
-$messages = $pdo->query("SELECT * FROM predefined_messages")->fetchAll();
+$messages = $pdo->query("SELECT * FROM predefined_messages ORDER BY position ASC, id ASC")->fetchAll();
 $classes = $pdo->query("SELECT * FROM classes ORDER BY name ASC")->fetchAll();
 $rooms = $pdo->query("SELECT * FROM rooms ORDER BY name ASC")->fetchAll();
 $timeSlots = range(8, 17); 

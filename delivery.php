@@ -13,14 +13,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($id > 0) {
         $actionType = '';
+        // Récupération de l'ID du membre CVL connecté
+        $adminId = $_SESSION['user_id'] ?? null;
 
         if ((isset($_POST['action']) && $_POST['action'] === 'mark_distributed') || isset($_POST['mark_prepared'])) {
-            $stmt = $pdo->prepare("UPDATE order_recipients SET is_distributed = 1, distributed_at = NOW() WHERE id = ?");
-            $stmt->execute([$id]);
+            // AJOUT : On enregistre aussi distributed_by_cvl_id
+            $stmt = $pdo->prepare("UPDATE order_recipients SET is_distributed = 1, distributed_at = NOW(), distributed_by_cvl_id = ? WHERE id = ?");
+            $stmt->execute([$adminId, $id]);
             $actionType = 'marked';
         }
         elseif (isset($_POST['unmark_prepared'])) {
-            $stmt = $pdo->prepare("UPDATE order_recipients SET is_distributed = 0, distributed_at = NULL WHERE id = ?");
+            // AJOUT : On remet distributed_by_cvl_id à NULL
+            $stmt = $pdo->prepare("UPDATE order_recipients SET is_distributed = 0, distributed_at = NULL, distributed_by_cvl_id = NULL WHERE id = ?");
             $stmt->execute([$id]);
             $actionType = 'unmarked';
         }

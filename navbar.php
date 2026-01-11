@@ -2,29 +2,22 @@
 // navbar.php
 
 // 1. DÉTECTION INTELLIGENTE DE L'UTILISATEUR
-// On regarde si auth_check.php a déjà fait le travail ($current_user_id)
-// Sinon, on regarde si une session est active via PHP standard
 $nav_user_id = null;
 $nav_prenom = 'Toi';
 
 if (isset($current_user_id)) {
-    // Cas idéal : auth_check.php a tourné juste avant
     $nav_user_id = $current_user_id;
     $nav_prenom = $current_user_prenom ?? 'Toi';
 } elseif (isset($_SESSION['user_id'])) {
-    // Cas de secours : on a une session PHP active
     $nav_user_id = $_SESSION['user_id'];
     $nav_prenom = $_SESSION['prenom'] ?? 'Toi';
 }
 
-// 2. DÉTECTION DU RÔLE (Seulement si on a trouvé un user)
+// 2. DÉTECTION DU RÔLE
 $nav_role = null;
 
 if ($nav_user_id) {
-    // On s'assure d'avoir accès à la base de données
-    // Si $pdo n'existe pas (cas page publique sans auth_check), on essaie de l'utiliser via $pdo_local ou on ne fait rien
     $db = isset($pdo) ? $pdo : (isset($pdo_local) ? $pdo_local : null);
-
     if ($db) {
         try {
             $stmtNav = $db->prepare("SELECT role FROM cvl_members WHERE user_id = ?");
@@ -33,16 +26,14 @@ if ($nav_user_id) {
             if ($res) {
                 $nav_role = $res['role'];
             }
-        } catch (Exception $e) {
-            // En cas d'erreur silencieuse (table pas prête...), on ignore pour ne pas casser le menu
-        }
+        } catch (Exception $e) {}
     }
 }
 ?>
 
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm mb-4">
   <div class="container">
-    <a class="navbar-brand fw-bold text-danger" href="index.php">🌹 St Valentin</a>
+    <a class="navbar-brand fw-bold text-danger" href="index.php">🌹 St Valentin 2026</a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
       <span class="navbar-toggler-icon"></span>
     </button>
@@ -62,11 +53,13 @@ if ($nav_user_id) {
                         🕵️ Espace CVL
                     </a>
                     <ul class="dropdown-menu dropdown-menu-end">
-                        <li><a class="dropdown-item" href="admin.php">📦 Gestion Commandes</a></li>
+                        <li><a class="dropdown-item" href="manage_orders.php">📦 Gestion Commandes</a></li>
+                        <li><a class="dropdown-item" href="preparation.php">🎁 Mode Préparation</a></li>
+                        <li><a class="dropdown-item" href="delivery.php">🚚 Mode Distribution</a></li>
                         
                         <?php if ($nav_role === 'admin'): ?>
                             <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="admin_team.php">👮 Gérer l'équipe</a></li>
+                            <li><a class="dropdown-item fw-bold text-danger" href="admin.php">⚡ Super Admin</a></li>
                         <?php endif; ?>
                     </ul>
                 </li>
@@ -74,7 +67,7 @@ if ($nav_user_id) {
 
             <li class="nav-item ms-3 d-flex align-items-center">
                 <span class="text-white me-3">Bonjour, <?php echo htmlspecialchars($nav_prenom); ?></span>
-                </li>
+            </li>
 
         <?php else: ?>
             <li class="nav-item">

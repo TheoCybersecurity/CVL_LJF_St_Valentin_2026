@@ -500,24 +500,21 @@ function saveSchedule(destId) {
     const form = document.getElementById(`form-schedule-${destId}`);
     const rows = form.querySelectorAll('.schedule-row');
     let scheduleData = [];
-    let hoursCheck = []; // Tableau pour vérifier les doublons
+    let hoursCheck = []; 
 
-    // On parcourt les lignes pour construire les données
     for (let row of rows) {
         const hour = row.querySelector('.schedule-hour').value;
         const room = row.querySelector('.schedule-room').value;
 
-        // VÉRIFICATION DOUBLONS
         if (hoursCheck.includes(hour)) {
-            alert(`Attention : Vous avez mis l'horaire de ${hour}h deux fois ! Veuillez corriger.`);
-            return; // On arrête tout, on n'envoie pas
+            showToast(`Attention : L'horaire de ${hour}h est en double !`, 'error');
+            return; 
         }
         hoursCheck.push(hour);
 
         scheduleData.push({ hour: hour, room_id: room });
     }
 
-    // Si tout est bon, on envoie
     fetch('api/update_schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -526,16 +523,27 @@ function saveSchedule(destId) {
     .then(res => res.json())
     .then(res => {
         if(res.success) {
+            // 1. On affiche le toast de succès
+            showToast("Horaires enregistrés avec succès !");
+
+            // 2. On rafraîchit la modale
+            // (Cela remet automatiquement la vue en mode "lecture")
             const orderId = document.getElementById('modal-order-id').innerText;
             showOrderDetails(parseInt(orderId));
+            
+            // J'ai SUPPRIMÉ la ligne 'toggleEditMode' qui causait le bug
         } else {
-            alert("Erreur : " + res.error);
+            showToast("Erreur : " + res.error, 'error');
         }
     })
-    .catch(err => alert("Erreur technique"));
+    .catch(err => {
+        console.error(err); // Affiche la vraie erreur dans la console (F12) au cas où
+        alert("Erreur technique (voir console)");
+    });
 }
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<?php include 'toast_notifications.php'; ?>
 </body>
 </html>
