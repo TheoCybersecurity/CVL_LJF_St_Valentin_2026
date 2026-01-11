@@ -132,6 +132,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
 $totalRevenue = $pdo->query("SELECT SUM(total_price) FROM orders WHERE is_paid = 1")->fetchColumn() ?: 0;
 $totalRoses = $pdo->query("SELECT SUM(quantity) FROM recipient_roses")->fetchColumn() ?: 0;
 $totalOrders = $pdo->query("SELECT COUNT(*) FROM orders")->fetchColumn() ?: 0;
+$stmtUnpaid = $pdo->query("SELECT COUNT(*) FROM orders WHERE is_paid = 0");
+$countUnpaid = $stmtUnpaid->fetchColumn();
+$percentPaid = ($totalOrders > 0) ? round((($totalOrders - $countUnpaid) / $totalOrders) * 100) : 0;
 
 // --- 3. REQUÊTE PRINCIPALE ---
 $sql = "
@@ -222,6 +225,7 @@ foreach ($raw_results as $row) {
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin - Saint Valentin</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/css/style.css">
@@ -244,27 +248,68 @@ foreach ($raw_results as $row) {
 
 <div class="container mt-4 mb-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2 class="fw-bold text-dark">Tableau de bord Admin 🕵️</h2>
-        <span class="badge bg-dark">Admin: <?php echo $_SESSION['prenom'] ?? 'Moi'; ?></span>
+        <div>
+            <h2 class="fw-bold text-dark mb-0">Tableau de bord CVL 🕵️</h2>
+            <span class="text-muted small">Bienvenue, <?php echo htmlspecialchars($_SESSION['prenom'] ?? 'Admin'); ?></span>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="stats.php" class="btn btn-outline-primary shadow-sm">
+                <i class="fas fa-chart-pie me-2"></i>Stats Détaillées
+            </a>
+            <?php if(isset($_SESSION['role']) && $_SESSION['role'] === 'admin'): ?>
+                <a href="admin.php" class="btn btn-dark shadow-sm"><i class="fas fa-cogs"></i></a>
+            <?php endif; ?>
+        </div>
     </div>
 
-    <div class="row mb-4">
+    <div class="row mb-4 g-3">
+        
         <div class="col-md-4">
-            <div class="card card-stat bg-money p-4 mb-3 shadow">
-                <h3 class="fw-bold"><?php echo number_format($totalRevenue, 2); ?> €</h3>
-                <span class="text-white-50">Recettes Encaissées</span>
+            <div class="card border-0 shadow-sm h-100" style="background: linear-gradient(135deg, #198754 0%, #20c997 100%); color: white;">
+                <div class="card-body p-3 d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-white-50 text-uppercase mb-1" style="font-size: 0.8rem; letter-spacing: 1px;">Cagnotte Totale</h6>
+                        <h2 class="fw-bold mb-0"><?php echo number_format($totalRevenue, 2); ?> €</h2>
+                    </div>
+                    <div class="rounded-circle bg-white bg-opacity-25 p-3">
+                        <i class="fas fa-euro-sign fa-2x"></i>
+                    </div>
+                </div>
             </div>
         </div>
+
         <div class="col-md-4">
-            <div class="card card-stat bg-roses p-4 mb-3 shadow">
-                <h3 class="fw-bold"><?php echo $totalRoses; ?> 🌹</h3>
-                <span class="text-white-50">Roses à distribuer</span>
+            <div class="card border-0 shadow-sm h-100 bg-white">
+                <div class="card-body p-3 border-start border-5 border-<?php echo ($countUnpaid > 0) ? 'warning' : 'success'; ?>">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div>
+                            <h6 class="text-muted text-uppercase mb-1" style="font-size: 0.8rem; letter-spacing: 1px;">En attente paiement</h6>
+                            <h2 class="fw-bold mb-0 text-dark"><?php echo $countUnpaid; ?> <small class="text-muted fs-6">commandes</small></h2>
+                        </div>
+                        <div class="text-<?php echo ($countUnpaid > 0) ? 'warning' : 'success'; ?>">
+                            <i class="fas fa-exclamation-circle fa-2x"></i>
+                        </div>
+                    </div>
+                    <div class="progress" style="height: 4px;">
+                        <div class="progress-bar bg-success" role="progressbar" style="width: <?php echo $percentPaid; ?>%"></div>
+                        <div class="progress-bar bg-warning" role="progressbar" style="width: <?php echo 100 - $percentPaid; ?>%"></div>
+                    </div>
+                    <small class="text-muted" style="font-size: 0.7rem;"><?php echo $percentPaid; ?>% payées</small>
+                </div>
             </div>
         </div>
+
         <div class="col-md-4">
-            <div class="card card-stat bg-orders p-4 mb-3 shadow">
-                <h3 class="fw-bold"><?php echo $totalOrders; ?></h3>
-                <span class="text-white-50">Commandes Totales</span>
+            <div class="card border-0 shadow-sm h-100" style="background: linear-gradient(135deg, #dc3545 0%, #ff6b6b 100%); color: white;">
+                <div class="card-body p-3 d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-white-50 text-uppercase mb-1" style="font-size: 0.8rem; letter-spacing: 1px;">Volume Roses</h6>
+                        <h2 class="fw-bold mb-0"><?php echo $totalRoses; ?> 🌹</h2>
+                    </div>
+                    <div class="rounded-circle bg-white bg-opacity-25 p-3">
+                        <i class="fas fa-box-open fa-2x"></i>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

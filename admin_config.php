@@ -263,6 +263,7 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Configuration Système - Admin</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -470,42 +471,55 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
                     </div>
                 </div>
 
-                <div class="table-responsive">
-                    <table class="table align-middle table-hover border">
-                        <thead class="table-light">
-                            <tr>
-                                <th style="width: 50px;"></th> 
-                                
-                                <th>Message</th>
-                                
-                                <th class="text-end" style="width: 100px;">Actions</th>
-                            </tr>
-                        </thead>
-                        
-                        <tbody id="sortable-messages">
-                            <?php foreach($messages as $msg): ?>
-                            <tr data-id="<?php echo $msg['id']; ?>" style="cursor: move;">
-                                <td class="text-center text-muted grab-handle">
-                                    <i class="fas fa-grip-vertical"></i>
-                                </td>
-                                
-                                <td>
-                                    <?php echo htmlspecialchars($msg['content']); ?>
-                                </td>
-                                
-                                <td class="text-end">
-                                    <a href="?delete=<?php echo $msg['id']; ?>&type=message" 
-                                    class="btn btn-sm btn-outline-danger border-0" 
-                                    onclick="return confirm('Supprimer ce message ?');">
-                                        <i class="fas fa-trash-alt"></i>
-                                    </a>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
+                <div class="tab-pane fade <?php echo $activeTab == 'messages' ? 'show active' : ''; ?>" id="tab-messages">
+                    <div class="row">
+                        <div class="col-md-12">
+                            <h5 class="fw-bold mb-3">Messages Prédéfinis</h5>
+                            <p class="text-muted small"><i class="fas fa-info-circle me-1"></i>Faites glisser les lignes pour changer l'ordre d'affichage.</p>
+                            
+                            <div class="table-responsive">
+                                <table class="table align-middle table-hover border">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width: 50px;"></th> 
+                                            <th>Message</th>
+                                            <th class="text-end" style="width: 100px;">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    
+                                    <tbody id="sortable-messages">
+                                        <?php foreach($messages as $msg): ?>
+                                        <tr data-id="<?php echo $msg['id']; ?>" style="cursor: move;">
+                                            <td class="text-center text-muted grab-handle">
+                                                <i class="fas fa-grip-vertical"></i>
+                                            </td>
+                                            <td>
+                                                <?php echo htmlspecialchars($msg['content']); ?>
+                                            </td>
+                                            <td class="text-end">
+                                                <a href="?delete=<?php echo $msg['id']; ?>&type=message" 
+                                                class="btn btn-sm btn-outline-danger border-0" 
+                                                onclick="return confirm('Supprimer ce message ?');">
+                                                    <i class="fas fa-trash-alt"></i>
+                                                </a>
+                                            </td>
+                                        </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                            
+                            <hr>
+                            <h6 class="fw-bold mt-4">Ajouter un nouveau message</h6>
+                            <form method="POST" class="d-flex gap-2">
+                                <input type="hidden" name="action" value="add_message">
+                                <input type="text" name="content" class="form-control" placeholder="Votre message ici..." required>
+                                <button type="submit" class="btn btn-dark">Ajouter</button>
+                            </form>
 
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
