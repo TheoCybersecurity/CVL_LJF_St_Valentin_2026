@@ -33,7 +33,7 @@ if ($nav_user_id) {
 
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm mb-4">
   <div class="container">
-    <a class="navbar-brand fw-bold text-danger" href="index.php">🌹 St Valentin 2026</a>
+    <a class="navbar-brand fw-bold text-danger brand-bounce" href="index.php">🌹 St Valentin 2026</a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
       <span class="navbar-toggler-icon"></span>
     </button>
@@ -42,40 +42,62 @@ if ($nav_user_id) {
       <ul class="navbar-nav ms-auto align-items-center">
         
         <li class="nav-item nav-item-home">
-          <a class="nav-link" href="index.php">Accueil</a>
+            <a class="nav-link" href="index.php">
+                <i class="fas fa-home me-1 text-primary"></i> <span class="link-text">Accueil</span>
+            </a>
         </li>
 
         <li class="nav-item">
-            <a class="nav-link" href="about.php"><i class="fas fa-info-circle me-1"></i> À propos</a>
+            <a class="nav-link" href="about.php">
+                <i class="fas fa-info-circle me-1 text-info"></i> <span class="link-text">À propos</span>
+            </a>
         </li>
 
         <?php if ($nav_user_id): ?>
             
             <?php if ($nav_role): ?>
                 <li class="nav-item dropdown nav-item-cvl">
-                    <a class="nav-link dropdown-toggle btn btn-outline-light ms-lg-2 px-3 border-0" href="#" role="button" data-bs-toggle="dropdown">
-                        🕵️ Espace CVL
+                    <a class="nav-link dropdown-toggle btn btn-outline-light ms-lg-2 px-3 border-0" href="#" role="button" data-bs-toggle="dropdown" data-bs-display="static">
+                        <i class="fas fa-users-cog me-1 text-warning"></i> Espace CVL
                     </a>
-                    <ul class="dropdown-menu dropdown-menu-end">
-                        <li><a class="dropdown-item" href="manage_orders.php">📦 Gestion Commandes</a></li>
-                        <li><a class="dropdown-item" href="preparation.php">🎁 Mode Préparation</a></li>
-                        <li><a class="dropdown-item" href="delivery.php">🚚 Mode Distribution</a></li>
+                    <ul class="dropdown-menu dropdown-menu-end shadow border-0">
+                        <li>
+                            <a class="dropdown-item" href="manage_orders.php">
+                                <i class="fas fa-clipboard-list me-2 text-secondary"></i> Gestion Commandes
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item" href="preparation.php">
+                                <i class="fas fa-boxes me-2 text-primary"></i> Mode Préparation
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item" href="delivery.php">
+                                <i class="fas fa-truck me-2 text-success"></i> Mode Distribution
+                            </a>
+                        </li>
                         
                         <?php if ($nav_role === 'admin'): ?>
                             <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item fw-bold text-danger" href="admin.php">⚡ Super Admin</a></li>
+                            <li>
+                                <a class="dropdown-item fw-bold text-danger" href="admin.php">
+                                    <i class="fas fa-bolt me-2"></i> Super Admin
+                                </a>
+                            </li>
                         <?php endif; ?>
                     </ul>
                 </li>
             <?php endif; ?>
 
-            <li class="nav-item nav-item-user ms-3 d-flex align-items-center">
-                <span class="text-white me-3">Bonjour, <?php echo htmlspecialchars($nav_prenom); ?></span>
+            <li class="nav-item nav-item-user ms-lg-3 d-flex align-items-center justify-content-center">
+                <span class="text-white">
+                    Bonjour, <strong class="text-info"><?php echo htmlspecialchars($nav_prenom); ?></strong>
+                </span>
             </li>
 
         <?php else: ?>
             <li class="nav-item nav-item-login">
-                <a href="https://auth.projets.marescal.fr/" class="btn btn-light ms-2">Connexion</a>
+                <a href="https://auth.projets.marescal.fr/" class="btn btn-light ms-2 px-4 fw-bold shadow-sm click-bounce">Connexion</a>
             </li>
         <?php endif; ?>
         
@@ -85,6 +107,52 @@ if ($nav_user_id) {
 </nav>
 
 <style>
+/* --- ANIMATIONS DE BASE --- */
+@keyframes clickBounce {
+    0% { transform: scale(1); }
+    50% { transform: scale(0.92); }
+    100% { transform: scale(1); }
+}
+
+/* Effet au clic (Bounce) sur les liens et boutons */
+.nav-link:active, 
+.dropdown-item:active, 
+.navbar-brand:active, 
+.btn:active {
+    animation: clickBounce 0.3s ease;
+}
+
+/* --- EFFETS AU SURVOL --- */
+.nav-link {
+    transition: all 0.3s ease;
+}
+
+.nav-link:hover .link-text {
+    color: #fff;
+    text-shadow: 0 0 10px rgba(255,255,255,0.2);
+}
+
+.nav-link:hover i {
+    transform: translateY(-2px) scale(1.2);
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.dropdown-item {
+    transition: all 0.2s ease;
+    padding: 10px 20px;
+}
+
+.dropdown-item:hover {
+    padding-left: 25px; /* Petit décalage vers la droite au survol */
+    background-color: #f8f9fa;
+}
+
+/* Couleurs spécifiques au survol des items du menu */
+.dropdown-item:hover i.text-primary { color: #0d6efd !important; } /* Bleu plus vif */
+.dropdown-item:hover i.text-danger { color: #dc3545 !important; }
+.dropdown-item:hover i.text-success { color: #198754 !important; }
+.dropdown-item:hover i.text-secondary { color: #212529 !important; } /* Gris devient noir */
+
 /* --- FIX CONTRASTE BOUTON ESPACE CVL --- */
 .navbar .dropdown-toggle.btn-outline-light:hover,
 .navbar .dropdown-toggle.btn-outline-light:focus,
@@ -93,131 +161,111 @@ if ($nav_user_id) {
     color: #212529 !important;
 }
 
-/* --- ANIMATION DESKTOP (Largeur >= 992px) --- */
+/* --- ANIMATION DESKTOP (Version corrigée sans décalage) --- */
 @media (min-width: 992px) {
     .navbar .dropdown-menu {
         display: block;
         opacity: 0;
         visibility: hidden;
-        transform: translateY(15px);
-        transition: all 0.3s cubic-bezier(0.2, 0, 0.2, 1);
+        margin-top: 15px !important; 
+        transition: opacity 0.3s ease, margin-top 0.3s cubic-bezier(0.2, 0, 0.2, 1), visibility 0.3s;
+        border-radius: 12px;
         border: none;
         box-shadow: 0 10px 30px rgba(0,0,0,0.15);
         pointer-events: none;
-        background-color: white;
     }
 
+    /* Quand le menu est ouvert */
     .navbar .dropdown-menu.show {
         opacity: 1;
         visibility: visible;
-        transform: translateY(0);
+        margin-top: 0 !important;
         pointer-events: auto;
     }
     
-    .dropdown-item {
-        color: #212529; 
-        transition: transform 0.2s, color 0.2s;
-    }
-    
-    .dropdown-item:hover {
-        background-color: transparent;
-        color: #dc3545;
-        transform: translateX(5px);
+    .dropdown-menu-end {
+        right: 0;
+        left: auto;
     }
 }
 
 /* --- OPTIMISATION & ANIMATION MOBILE (Largeur < 992px) --- */
 @media (max-width: 991.98px) {
     
-    /* 1. REORGANISATION DE L'ORDRE D'AFFICHAGE */
     .navbar-nav {
         display: flex;
         flex-direction: column;
-        padding-top: 10px;
         width: 100%;
+        padding: 10px 0;
     }
 
-    /* Le Bonjour passe tout en haut */
     .nav-item-user {
-        order: -1; 
+        order: -2; 
         width: 100%;
+        display: flex;
         justify-content: center;
-        margin-left: 0 !important; /* On annule le ms-3 du PC */
-        margin-bottom: 15px;
+        align-items: center;
         padding-bottom: 15px;
-        border-bottom: 1px solid rgba(255,255,255,0.1); /* Petit trait de séparation */
+        margin-bottom: 15px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
     }
     
     .nav-item-user span {
-        margin-right: 0 !important; /* Centrage du texte */
-        font-weight: bold;
-        color: #adb5bd !important; /* Un gris un peu plus clair pour distinguer */
-    }
-
-    /* L'Accueil en deuxième */
-    .nav-item-home {
-        order: 0;
+        margin-right: 0 !important;
+        font-size: 1.1rem;
         text-align: center;
-        margin-bottom: 10px;
     }
 
-    /* Le Bouton Espace CVL en dernier */
-    .nav-item-cvl {
-        order: 1;
-        width: 100%;
-        text-align: center;
-        margin-bottom: 20px;
-    }
-    
-    /* Bouton Connexion (si pas connecté) */
-    .nav-item-login {
-        margin-left: 0 !important;
-        text-align: center;
-        margin-top: 10px;
-    }
-    .nav-item-login a {
-        width: 100%; /* Bouton pleine largeur */
-        display: block;
-    }
-
-
-    /* 2. ANIMATION DROPDOWN MOBILE */
+    /* MENU DÉROULANT MOBILE */
     .navbar .dropdown-menu {
-        display: block;
+        display: block !important;
         max-height: 0;
         overflow: hidden;
         opacity: 0;
         border: none;
         padding: 0;
-        margin: 0;
-        transition: all 0.3s ease-in-out;
-        transform: translateY(-10px);
-        background-color: transparent !important;
-        text-align: center; /* On centre aussi les sous-menus */
+        margin: 5px 0;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        background-color: rgba(255, 255, 255, 0.08) !important;
+        width: 100%;
+        border-radius: 10px;
     }
 
     .navbar .dropdown-menu.show {
         max-height: 500px;
         opacity: 1;
-        padding: 0.5rem 0;
-        margin-top: 0.5rem;
-        transform: translateY(0);
+        padding: 10px 0;
     }
     
     .dropdown-item {
-        color: rgba(255,255,255,0.8);
-        padding: 10px 0; /* Plus d'espace pour le doigt */
+        color: #fff !important;
+        text-align: left;
+        padding: 12px 20px;
+        white-space: nowrap;
+        font-size: 1rem;
+        display: flex;
+        align-items: center;
     }
     
-    .dropdown-item:hover, .dropdown-item:focus {
-        background-color: transparent;
-        color: #fff;
+    .dropdown-item i {
+        width: 25px;
+        margin-right: 10px;
+        text-align: center;
+    }
+
+    .nav-item-home, .nav-item {
+        text-align: center;
+        width: 100%;
+        margin-bottom: 5px;
+    }
+
+    .nav-item-cvl {
+        width: 100%;
+        margin-top: 10px;
     }
     
-    .dropdown-divider {
-        border-top: 1px solid rgba(255,255,255,0.2);
-        margin: 10px auto;
-        width: 50%; /* Le diviseur ne prend que la moitié de la largeur */
+    .nav-item-cvl .btn {
+        width: 100%;
     }
 }
 </style>

@@ -36,6 +36,12 @@ $sql = "
 $stmt = $pdo->prepare($sql);
 $stmt->execute([$current_user_id]);
 $orders = $stmt->fetchAll();
+
+// Vérification de l'ouverture des ventes
+$stmt = $pdo->prepare("SELECT setting_value FROM global_settings WHERE setting_key = 'sales_open'");
+$stmt->execute();
+// Si la ligne n'existe pas, on considère que c'est ouvert par défaut (ou false, selon ta préférence)
+$isSalesOpen = $stmt->fetchColumn() == '1';
 ?>
 
 <!DOCTYPE html>
@@ -59,9 +65,15 @@ $orders = $stmt->fetchAll();
             <p class="text-muted">Suivez l'état de vos commandes en temps réel.</p>
         </div>
         <div class="col-md-4 text-end">
-            <a href="order.php" class="btn btn-danger btn-lg shadow rounded-pill px-4">
-                <i class="fas fa-heart me-2"></i>Nouvelle commande
-            </a>
+            <?php if ($isSalesOpen): ?>
+                <a href="order.php" class="btn btn-danger btn-lg shadow rounded-pill px-4">
+                    <i class="fas fa-heart me-2"></i>Nouvelle commande
+                </a>
+            <?php else: ?>
+                <button class="btn btn-secondary btn-lg shadow rounded-pill px-4" disabled>
+                    <i class="fas fa-lock me-2"></i>Ventes terminées
+                </button>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -69,9 +81,17 @@ $orders = $stmt->fetchAll();
         <div class="card shadow-sm border-0 text-center py-5">
             <div class="card-body">
                 <div class="mb-3 text-muted display-1"><i class="fas fa-box-open"></i></div>
-                <h4>Vous n'avez passé aucune commande.</h4>
-                <p class="text-muted">La Saint-Valentin approche !</p>
-                <a href="order.php" class="btn btn-primary mt-3 rounded-pill px-4">Commencer</a>
+                
+                <?php if ($isSalesOpen): ?>
+                    <h4>Vous n'avez passé aucune commande.</h4>
+                    <p class="text-muted">La Saint-Valentin approche !</p>
+                    <a href="order.php" class="btn btn-primary mt-3 rounded-pill px-4">Commencer</a>
+                <?php else: ?>
+                    <h4>Les ventes sont momentanément fermées.</h4>
+                    <p class="text-muted">Il n'est plus possible de passer de nouvelles commandes.</p>
+                    <button class="btn btn-secondary mt-3 rounded-pill px-4" disabled>Ventes terminées</button>
+                <?php endif; ?>
+                
             </div>
         </div>
     <?php else: ?>

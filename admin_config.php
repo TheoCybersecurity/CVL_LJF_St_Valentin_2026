@@ -15,21 +15,22 @@ function setToast($type, $msg) {
     $_SESSION['toast'] = ['type' => $type, 'message' => $msg];
 }
 
-// --- TRAITEMENT AJAX (Drag & Drop) ---
+// --- FONCTION POUR RÉCUPÉRER UN PARAMÈTRE ---
+function getGlobalSetting($pdo, $key) {
+    $stmt = $pdo->prepare("SELECT setting_value FROM global_settings WHERE setting_key = ?");
+    $stmt->execute([$key]);
+    return $stmt->fetchColumn();
+}
+
+// --- TRAITEMENT AJAX (Drag & Drop - Messages) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'reorder_messages') {
-    
-    // 1. On coupe toutes les erreurs PHP qui pourraient polluer la réponse
     error_reporting(0); 
     ini_set('display_errors', 0);
-
-    // 2. On nettoie le tampon de sortie (buffer)
     if (ob_get_length()) ob_clean(); 
-    
     header('Content-Type: application/json');
 
     try {
         $order = json_decode($_POST['order'], true);
-
         if (is_array($order)) {
             $pdo->beginTransaction();
             foreach ($order as $position => $id) {
@@ -40,43 +41,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             }
             $pdo->commit();
-            // La réponse propre
             echo json_encode(['status' => 'success']);
         } else {
             echo json_encode(['status' => 'error', 'message' => 'Données invalides']);
         }
-
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['status' => 'error', 'message' => 'Erreur SQL']);
     }
-
-    // 3. On tue le script IMMÉDIATEMENT après avoir envoyé le JSON
     exit; 
 }
 
-// --- TRAITEMENT DES ACTIONS (POST/GET) ---
-
+// --- TRAITEMENT DES ACTIONS (POST) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
     try {
         // --- 1. GESTION DES ROSES ---
         if ($action === 'add_rose') {
-            $stmt = $pdo->prepare("INSERT INTO rose_products (name, price, is_active) VALUES (?, ?, 1)");
-            $stmt->execute([$_POST['name'], $_POST['price']]);
-            setToast('success', 'Nouvelle rose ajoutée.');
+            // Suppression du prix et de is_active (mis à 1 par défaut)
+            $stmt = $pdo->prepare("INSERT INTO rose_products (name, is_active) VALUES (?, 1)");
+            $stmt->execute([$_POST['name']]);
+            setToast('success', 'Nouvelle variété ajoutée.');
             redirect('roses');
         }
         elseif ($action === 'update_rose') {
-            $active = isset($_POST['is_active']) ? 1 : 0;
-            $stmt = $pdo->prepare("UPDATE rose_products SET name = ?, price = ?, is_active = ? WHERE id = ?");
-            $stmt->execute([$_POST['name'], $_POST['price'], $active, $_POST['id']]);
-            setToast('success', 'Rose modifiée avec succès.');
+            // On ne modifie plus que le nom
+            $stmt = $pdo->prepare("UPDATE rose_products SET name = ? WHERE id = ?");
+            $stmt->execute([$_POST['name'], $_POST['id']]);
+            setToast('success', 'Variété modifiée.');
             redirect('roses');
         }
 
-        // --- 2. GESTION DES CLASSES & NIVEAUX ---
+        // --- 2. GESTION DES TARIFS (NOUVEAU) ---
+        elseif ($action === 'add_price_rule') {
+            $qty = intval($_POST['quantity']);
+            $price = floatval($_POST['price']);
+            // Mise à jour si la quantité existe déjà
+            $stmt = $pdo->prepare("INSERT INTO roses_prices (quantity, price) VALUES (?, ?) ON DUPLICATE KEY UPDATE price = ?");
+            $stmt->execute([$qty, $price, $price]);
+            setToast('success', 'Tarif ajouté/mis à jour.');
+            redirect('roses');
+        }
+        elseif ($action === 'update_price_rule') {
+            $old_qty = intval($_POST['original_quantity']);
+            $new_qty = intval($_POST['quantity']);
+            $price = floatval($_POST['price']);
+            
+            // Si on change la quantité (Clé primaire), on fait un UPDATE avec WHERE
+            $stmt = $pdo->prepare("UPDATE roses_prices SET quantity = ?, price = ? WHERE quantity = ?");
+            $stmt->execute([$new_qty, $price, $old_qty]);
+            setToast('success', 'Tarif modifié.');
+            redirect('roses');
+        }
+
+        // --- 3. GESTION DES CLASSES & NIVEAUX ---
         elseif ($action === 'add_class') {
             $stmt = $pdo->prepare("INSERT INTO classes (name, level_id) VALUES (?, ?)");
             $stmt->execute([trim($_POST['name']), $_POST['level_id']]);
@@ -102,7 +121,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('classes');
         }
 
-        // --- 3. GESTION DES SALLES, BÂTIMENTS, ÉTAGES ---
+        // --- 4. GESTION DES SALLES, BÂTIMENTS, ÉTAGES ---
         elseif ($action === 'add_room') {
             $stmt = $pdo->prepare("INSERT INTO rooms (name, building_id, floor_id) VALUES (?, ?, ?)");
             $stmt->execute([trim($_POST['name']), $_POST['building_id'], $_POST['floor_id']]);
@@ -140,7 +159,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('rooms');
         }
 
-        // --- 4. GESTION DES MESSAGES ---
+        // --- 5. GESTION DES MESSAGES ---
         elseif ($action === 'add_message') {
             $stmt = $pdo->prepare("INSERT INTO predefined_messages (content) VALUES (?)");
             $stmt->execute([$_POST['content']]);
@@ -148,63 +167,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('messages');
         }
         elseif ($action === 'update_message_id') {
-            // Changement de l'ID (Risqué mais demandé)
             $oldId = $_POST['old_id'];
             $newId = $_POST['new_id'];
             if ($oldId != $newId) {
-                // On vérifie si l'ID est libre
                 $check = $pdo->prepare("SELECT id FROM predefined_messages WHERE id = ?");
                 $check->execute([$newId]);
                 if ($check->rowCount() > 0) {
-                    setToast('danger', 'Erreur : Cet ID est déjà pris par un autre message.');
+                    setToast('danger', 'Erreur : Cet ID est déjà pris.');
                 } else {
                     $stmt = $pdo->prepare("UPDATE predefined_messages SET id = ? WHERE id = ?");
                     $stmt->execute([$newId, $oldId]);
-                    setToast('success', 'Ordre du message modifié (ID changé).');
+                    setToast('success', 'ID du message modifié.');
                 }
             }
             redirect('messages');
         }
-        // --- 5. GESTION DU RÉAGENCEMENT (AJAX) ---
-        elseif ($action === 'reorder_messages') {
-            // On reçoit une liste d'IDs dans le nouvel ordre
-            $order = json_decode($_POST['order'], true);
+        // --- 6. GESTION DE L'OUVERTURE DES VENTES ---
+        elseif ($action === 'toggle_sales') {
+            // Si la checkbox est cochée, on reçoit '1', sinon on ne reçoit rien donc '0'
+            $status = isset($_POST['sales_status']) ? '1' : '0';
             
-            if (is_array($order)) {
-                try {
-                    $pdo->beginTransaction();
-                    foreach ($order as $position => $id) {
-                        // On met à jour la position (0, 1, 2...)
-                        $stmt = $pdo->prepare("UPDATE predefined_messages SET position = ? WHERE id = ?");
-                        $stmt->execute([$position, $id]);
-                    }
-                    $pdo->commit();
-                    echo json_encode(['status' => 'success']);
-                } catch (Exception $e) {
-                    $pdo->rollBack();
-                    http_response_code(500);
-                    echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
-                }
-            }
-            exit; // Important : On arrête le script ici car c'est une requête AJAX
+            $stmt = $pdo->prepare("INSERT INTO global_settings (setting_key, setting_value) VALUES ('sales_open', ?) ON DUPLICATE KEY UPDATE setting_value = ?");
+            $stmt->execute([$status, $status]);
+            
+            $msg = ($status == '1') ? "Les ventes sont OUVERTES." : "Les ventes sont FERMÉES.";
+            setToast(($status == '1' ? 'success' : 'warning'), $msg);
+            redirect('general'); // On redirige vers un nouvel onglet "Général"
         }
 
     } catch (PDOException $e) {
         setToast('danger', 'Erreur SQL : ' . $e->getMessage());
-        // On reste sur la page pour voir l'erreur
     }
 }
 
 // --- SUPPRESSIONS (GET) ---
-if (isset($_GET['delete'])) {
+if (isset($_GET['delete']) && isset($_GET['type'])) {
     $type = $_GET['type'];
-    $id = intval($_GET['delete']);
-    $tab = 'roses'; // default
+    $id = intval($_GET['delete']); // Sert aussi pour la quantité
+    $tab = 'roses';
 
     try {
         if ($type === 'rose') {
             $pdo->prepare("DELETE FROM rose_products WHERE id = ?")->execute([$id]);
-            setToast('warning', 'Rose supprimée.');
+            setToast('warning', 'Variété supprimée.');
+            $tab = 'roses';
+        }
+        elseif ($type === 'price_rule') {
+            $pdo->prepare("DELETE FROM roses_prices WHERE quantity = ?")->execute([$id]);
+            setToast('warning', 'Tarif supprimé.');
             $tab = 'roses';
         }
         elseif ($type === 'class') {
@@ -238,14 +248,16 @@ if (isset($_GET['delete'])) {
             $tab = 'messages';
         }
     } catch (PDOException $e) {
-        setToast('danger', 'Impossible de supprimer : Donnée liée à des commandes ou des élèves existants.');
+        setToast('danger', 'Impossible de supprimer : Donnée liée à des commandes existantes.');
     }
     redirect($tab);
 }
 
 // --- RECUPERATION DES DONNEES ---
-
-$roses = $pdo->query("SELECT * FROM rose_products ORDER BY price ASC")->fetchAll(PDO::FETCH_ASSOC);
+// Roses triées par Nom (plus de prix)
+$roses = $pdo->query("SELECT * FROM rose_products ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
+// Prix triés par Quantité
+$rosesPrices = $pdo->query("SELECT * FROM roses_prices ORDER BY quantity ASC")->fetchAll(PDO::FETCH_ASSOC);
 
 $classes = $pdo->query("SELECT c.*, cl.name as level_name FROM classes c LEFT JOIN class_levels cl ON c.level_id = cl.id ORDER BY cl.id ASC, c.name ASC")->fetchAll(PDO::FETCH_ASSOC);
 $levels = $pdo->query("SELECT * FROM class_levels ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
@@ -256,7 +268,10 @@ $floors = $pdo->query("SELECT * FROM floors ORDER BY level_number ASC")->fetchAl
 
 $messages = $pdo->query("SELECT * FROM predefined_messages ORDER BY position ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
 
-$activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
+$activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'general';
+
+// Chargement de l'état des ventes
+$salesOpen = getGlobalSetting($pdo, 'sales_open') == '1';
 ?>
 
 <!DOCTYPE html>
@@ -289,57 +304,192 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
     <div class="card shadow-sm border-0">
         <div class="card-header bg-white pt-3 pb-0">
             <ul class="nav nav-tabs card-header-tabs" id="configTabs">
-                <li class="nav-item"><a class="nav-link <?php echo $activeTab == 'roses' ? 'active' : ''; ?>" href="#tab-roses" data-bs-toggle="tab">🌹 Roses & Prix</a></li>
-                <li class="nav-item"><a class="nav-link <?php echo $activeTab == 'classes' ? 'active' : ''; ?>" href="#tab-classes" data-bs-toggle="tab">🎓 Classes & Niveaux</a></li>
-                <li class="nav-item"><a class="nav-link <?php echo $activeTab == 'rooms' ? 'active' : ''; ?>" href="#tab-rooms" data-bs-toggle="tab">🏢 Salles & Bâtiments</a></li>
-                <li class="nav-item"><a class="nav-link <?php echo $activeTab == 'messages' ? 'active' : ''; ?>" href="#tab-messages" data-bs-toggle="tab">💌 Messages</a></li>
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $activeTab == 'general' ? 'active' : ''; ?>" 
+                    href="?tab=general">
+                    <i class="fas fa-cogs me-2"></i>Général
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $activeTab == 'roses' ? 'active' : ''; ?>" 
+                    href="?tab=roses">
+                    🌹 Roses & Prix
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $activeTab == 'classes' ? 'active' : ''; ?>" 
+                    href="?tab=classes">
+                    🎓 Classes & Niveaux
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $activeTab == 'rooms' ? 'active' : ''; ?>" 
+                    href="?tab=rooms">
+                    🏢 Salles & Bâtiments
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $activeTab == 'messages' ? 'active' : ''; ?>" 
+                    href="?tab=messages">
+                    💌 Messages
+                    </a>
+                </li>
             </ul>
         </div>
         
         <div class="card-body">
             <div class="tab-content">
+
+                <div class="tab-pane fade <?php echo $activeTab == 'general' ? 'show active' : ''; ?>" id="tab-general">
+                    <div class="row justify-content-center">
+                        <div class="col-md-6">
+                            <div class="card shadow-sm border-0">
+                                <div class="card-header bg-dark text-white fw-bold">
+                                    <i class="fas fa-store-slash me-2"></i>État de la boutique
+                                </div>
+                                <div class="card-body text-center py-5">
+                                    
+                                    <h5 class="mb-4">Autoriser les élèves à commander ?</h5>
+
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="toggle_sales">
+                                        
+                                        <div class="form-check form-switch d-flex justify-content-center mb-4 ps-0">
+                                            <input class="form-check-input ms-0 me-3" type="checkbox" name="sales_status" value="1" 
+                                                id="salesSwitch" style="transform: scale(1.5);" 
+                                                <?php echo $salesOpen ? 'checked' : ''; ?> 
+                                                onchange="this.form.submit()">
+                                            
+                                            <label class="form-check-label fw-bold lead" for="salesSwitch">
+                                                <?php if($salesOpen): ?>
+                                                    <span class="text-success"><i class="fas fa-check-circle"></i> Ventes Ouvertes</span>
+                                                <?php else: ?>
+                                                    <span class="text-danger"><i class="fas fa-ban"></i> Ventes Fermées</span>
+                                                <?php endif; ?>
+                                            </label>
+                                        </div>
+                                        
+                                        <p class="text-muted small">
+                                            Si vous désactivez cette option, la page de commande affichera un message indiquant que les ventes sont closes.
+                                            L'interface administrateur reste accessible.
+                                        </p>
+                                    </form>
+
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 
                 <div class="tab-pane fade <?php echo $activeTab == 'roses' ? 'show active' : ''; ?>" id="tab-roses">
                     <div class="row">
-                        <div class="col-md-8">
-                            <h5 class="fw-bold mb-3">Catalogue</h5>
-                            <table class="table align-middle table-hover">
-                                <thead class="table-light"><tr><th>Nom</th><th>Prix</th><th>Actif</th><th class="text-end">Actions</th></tr></thead>
-                                <tbody>
-                                    <?php foreach($roses as $r): ?>
-                                    <tr>
-                                        <td class="fw-bold"><?php echo htmlspecialchars($r['name']); ?></td>
-                                        <td><?php echo number_format($r['price'], 2); ?> €</td>
-                                        <td>
-                                            <?php if($r['is_active']): ?>
-                                                <span class="badge bg-success">Oui</span>
-                                            <?php else: ?>
-                                                <span class="badge bg-secondary">Non</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td class="text-end">
-                                            <button class="btn btn-sm btn-outline-primary table-action-btn me-1" 
-                                                    onclick="editRose(<?php echo htmlspecialchars(json_encode($r)); ?>)">
-                                                <i class="fas fa-edit"></i>
-                                            </button>
-                                            <a href="?delete=<?php echo $r['id']; ?>&type=rose" class="btn btn-sm btn-outline-danger table-action-btn" onclick="return confirm('Supprimer cette rose ?');">
-                                                <i class="fas fa-trash-alt"></i>
-                                            </a>
-                                        </td>
-                                    </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="card bg-light border-0">
+                        
+                        <div class="col-lg-6 mb-4">
+                            <div class="card h-100 shadow-sm border-0">
+                                <div class="card-header bg-danger text-white fw-bold">
+                                    <i class="fas fa-flower"></i> Variétés de Roses
+                                </div>
                                 <div class="card-body">
-                                    <h6 class="fw-bold"><i class="fas fa-plus-circle me-2"></i>Ajouter une rose</h6>
-                                    <form method="POST">
+                                    <table class="table table-sm align-middle table-hover mb-4">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Nom de la variété</th>
+                                                <th class="text-end">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php foreach($roses as $r): ?>
+                                            <tr>
+                                                <td class="fw-bold"><?php echo htmlspecialchars($r['name']); ?></td>
+                                                <td class="text-end">
+                                                    <button class="btn btn-sm btn-outline-primary me-1" 
+                                                            onclick="editRose('<?php echo $r['id']; ?>', '<?php echo addslashes($r['name']); ?>')">
+                                                        <i class="fas fa-edit"></i>
+                                                    </button>
+                                                    <a href="?delete=<?php echo $r['id']; ?>&type=rose" 
+                                                    class="btn btn-sm btn-outline-danger" 
+                                                    onclick="return confirm('Supprimer cette rose ?');">
+                                                        <i class="fas fa-trash-alt"></i>
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+
+                                    <hr>
+                                    <h6 class="fw-bold text-muted mb-2"><i class="fas fa-plus-circle me-1"></i>Ajouter une variété</h6>
+                                    <form method="POST" class="row g-2">
                                         <input type="hidden" name="action" value="add_rose">
-                                        <div class="mb-2"><input type="text" name="name" class="form-control" placeholder="Nom (ex: Rose Bleue)" required></div>
-                                        <div class="mb-3"><input type="number" step="0.01" name="price" class="form-control" placeholder="Prix (ex: 1.50)" required></div>
-                                        <button type="submit" class="btn btn-dark w-100">Ajouter</button>
+                                        <div class="col-8">
+                                            <input type="text" name="name" class="form-control form-control-sm" placeholder="Nom (ex: Rose Rouge)" required>
+                                        </div>
+                                        <div class="col-4">
+                                            <button type="submit" class="btn btn-sm btn-dark w-100">Ajouter</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-lg-6 mb-4">
+                            <div class="card h-100 shadow-sm border-0">
+                                <div class="card-header bg-primary text-white fw-bold">
+                                    <i class="fas fa-tags"></i> Grille Tarifaire
+                                </div>
+                                <div class="card-body">
+                                    <table class="table table-sm align-middle table-striped mb-4">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Quantité</th>
+                                                <th>Prix Total</th>
+                                                <th class="text-end">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php if(empty($rosesPrices)): ?>
+                                                <tr><td colspan="3" class="text-center text-muted">Aucun tarif défini</td></tr>
+                                            <?php endif; ?>
+
+                                            <?php foreach($rosesPrices as $rp): ?>
+                                            <tr>
+                                                <td class="fw-bold"><?php echo $rp['quantity']; ?> rose(s)</td>
+                                                <td class="text-primary fw-bold"><?php echo number_format($rp['price'], 2); ?> €</td>
+                                                <td class="text-end">
+                                                    <button class="btn btn-sm btn-outline-primary me-1" 
+                                                            onclick="editPrice(<?php echo $rp['quantity']; ?>, <?php echo $rp['price']; ?>)">
+                                                        <i class="fas fa-edit"></i>
+                                                    </button>
+                                                    <a href="?delete=<?php echo $rp['quantity']; ?>&type=price_rule" 
+                                                    class="btn btn-sm btn-outline-danger" 
+                                                    onclick="return confirm('Supprimer ce tarif ?');">
+                                                        <i class="fas fa-trash-alt"></i>
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+
+                                    <hr>
+                                    <h6 class="fw-bold text-muted mb-2"><i class="fas fa-plus-circle me-1"></i>Ajouter un tarif</h6>
+                                    <form method="POST" class="row g-2 align-items-end">
+                                        <input type="hidden" name="action" value="add_price_rule">
+                                        <div class="col-5">
+                                            <label class="small text-muted">Qté</label>
+                                            <input type="number" name="quantity" class="form-control form-control-sm" placeholder="Ex: 10" required min="1">
+                                        </div>
+                                        <div class="col-4">
+                                            <label class="small text-muted">Prix (€)</label>
+                                            <input type="number" step="0.01" name="price" class="form-control form-control-sm" placeholder="Ex: 12.50" required min="0">
+                                        </div>
+                                        <div class="col-3">
+                                            <button type="submit" class="btn btn-sm btn-success w-100">OK</button>
+                                        </div>
                                     </form>
                                 </div>
                             </div>
@@ -362,11 +512,16 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
                                         <tr>
                                             <td class="ps-3 fw-bold"><?php echo htmlspecialchars($c['name']); ?></td>
                                             <td><span class="badge bg-secondary"><?php echo htmlspecialchars($c['level_name']); ?></span></td>
-                                            <td class="text-end pe-3">
-                                                <button class="btn btn-sm text-primary p-0 me-2" onclick="editClass(<?php echo $c['id']; ?>, '<?php echo addslashes($c['name']); ?>', <?php echo $c['level_id']; ?>)">
+                                            <td class="text-end">
+                                                <button class="btn btn-sm btn-outline-primary me-1" 
+                                                        onclick="editClass(<?php echo $c['id']; ?>, '<?php echo addslashes($c['name']); ?>', <?php echo $c['level_id']; ?>)">
                                                     <i class="fas fa-edit"></i>
                                                 </button>
-                                                <a href="?delete=<?php echo $c['id']; ?>&type=class" class="text-danger" onclick="return confirm('Supprimer ?');"><i class="fas fa-trash-alt"></i></a>
+                                                <a href="?delete=<?php echo $c['id']; ?>&type=class" 
+                                                class="btn btn-sm btn-outline-danger" 
+                                                onclick="return confirm('Supprimer ?');">
+                                                    <i class="fas fa-trash-alt"></i>
+                                                </a>
                                             </td>
                                         </tr>
                                         <?php endforeach; ?>
@@ -381,9 +536,15 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
                                 <li class="list-group-item d-flex justify-content-between align-items-center">
                                     <span><?php echo htmlspecialchars($l['name']); ?></span>
                                     <div>
-                                        <button class="btn btn-sm btn-link text-decoration-none p-0 me-2" 
-                                                onclick="editLevel(<?php echo $l['id']; ?>, '<?php echo addslashes($l['name']); ?>')">Edit</button>
-                                        <a href="?delete=<?php echo $l['id']; ?>&type=level" class="text-danger small" onclick="return confirm('Supprimer ce niveau ?');"><i class="fas fa-times"></i></a>
+                                        <button class="btn btn-sm btn-outline-primary me-1" 
+                                                onclick="editLevel(<?php echo $l['id']; ?>, '<?php echo addslashes($l['name']); ?>')">
+                                            <i class="fas fa-edit"></i>
+                                        </button>
+                                        <a href="?delete=<?php echo $l['id']; ?>&type=level" 
+                                        class="btn btn-sm btn-outline-danger" 
+                                        onclick="return confirm('Supprimer ce niveau ?');">
+                                            <i class="fas fa-trash-alt"></i>
+                                        </a>
                                     </div>
                                 </li>
                                 <?php endforeach; ?>
@@ -412,12 +573,16 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
                                         <tr>
                                             <td class="ps-3 fw-bold"><?php echo htmlspecialchars($r['name']); ?></td>
                                             <td class="small text-muted"><?php echo htmlspecialchars($r['bat_name'] . ' - ' . $r['floor_name']); ?></td>
-                                            <td class="text-end pe-3">
-                                                <button class="btn btn-sm text-primary p-0 me-2" 
+                                            <td class="text-end">
+                                                <button class="btn btn-sm btn-outline-primary me-1" 
                                                         onclick="editRoom(<?php echo $r['id']; ?>, '<?php echo addslashes($r['name']); ?>', <?php echo $r['building_id']; ?>, <?php echo $r['floor_id']; ?>)">
                                                     <i class="fas fa-edit"></i>
                                                 </button>
-                                                <a href="?delete=<?php echo $r['id']; ?>&type=room" class="text-danger" onclick="return confirm('Supprimer ?');"><i class="fas fa-trash-alt"></i></a>
+                                                <a href="?delete=<?php echo $r['id']; ?>&type=room" 
+                                                class="btn btn-sm btn-outline-danger" 
+                                                onclick="return confirm('Supprimer ?');">
+                                                    <i class="fas fa-trash-alt"></i>
+                                                </a>
                                             </td>
                                         </tr>
                                         <?php endforeach; ?>
@@ -431,11 +596,18 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
                                 <h6 class="fw-bold text-primary">Bâtiments</h6>
                                 <ul class="list-group mb-2">
                                     <?php foreach($buildings as $b): ?>
-                                    <li class="list-group-item d-flex justify-content-between py-1">
+                                    <li class="list-group-item d-flex justify-content-between align-items-center py-2">
                                         <?php echo htmlspecialchars($b['name']); ?>
                                         <div>
-                                            <a href="#" onclick="editBuilding(<?php echo $b['id']; ?>, '<?php echo addslashes($b['name']); ?>')" class="text-primary me-2"><i class="fas fa-edit"></i></a>
-                                            <a href="?delete=<?php echo $b['id']; ?>&type=building" class="text-danger" onclick="return confirm('Supprimer ?')"><i class="fas fa-times"></i></a>
+                                            <button class="btn btn-sm btn-outline-primary me-1" 
+                                                    onclick="editBuilding(<?php echo $b['id']; ?>, '<?php echo addslashes($b['name']); ?>')">
+                                                <i class="fas fa-edit"></i>
+                                            </button>
+                                            <a href="?delete=<?php echo $b['id']; ?>&type=building" 
+                                            class="btn btn-sm btn-outline-danger" 
+                                            onclick="return confirm('Supprimer ?')">
+                                                <i class="fas fa-trash-alt"></i>
+                                            </a>
                                         </div>
                                     </li>
                                     <?php endforeach; ?>
@@ -451,11 +623,18 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
                                 <h6 class="fw-bold text-primary">Étages</h6>
                                 <ul class="list-group mb-2">
                                     <?php foreach($floors as $f): ?>
-                                    <li class="list-group-item d-flex justify-content-between py-1">
+                                    <li class="list-group-item d-flex justify-content-between align-items-center py-2">
                                         <?php echo htmlspecialchars($f['name']); ?>
                                         <div>
-                                            <a href="#" onclick="editFloor(<?php echo $f['id']; ?>, '<?php echo addslashes($f['name']); ?>')" class="text-primary me-2"><i class="fas fa-edit"></i></a>
-                                            <a href="?delete=<?php echo $f['id']; ?>&type=floor" class="text-danger" onclick="return confirm('Supprimer ?')"><i class="fas fa-times"></i></a>
+                                            <button class="btn btn-sm btn-outline-primary me-1" 
+                                                    onclick="editFloor(<?php echo $f['id']; ?>, '<?php echo addslashes($f['name']); ?>')">
+                                                <i class="fas fa-edit"></i>
+                                            </button>
+                                            <a href="?delete=<?php echo $f['id']; ?>&type=floor" 
+                                            class="btn btn-sm btn-outline-danger" 
+                                            onclick="return confirm('Supprimer ?')">
+                                                <i class="fas fa-trash-alt"></i>
+                                            </a>
                                         </div>
                                     </li>
                                     <?php endforeach; ?>
@@ -498,7 +677,7 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
                                             </td>
                                             <td class="text-end">
                                                 <a href="?delete=<?php echo $msg['id']; ?>&type=message" 
-                                                class="btn btn-sm btn-outline-danger border-0" 
+                                                class="btn btn-sm btn-outline-danger" 
                                                 onclick="return confirm('Supprimer ce message ?');">
                                                     <i class="fas fa-trash-alt"></i>
                                                 </a>
@@ -528,15 +707,53 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
 <div class="modal fade" id="editRoseModal" tabindex="-1">
     <div class="modal-dialog">
         <form class="modal-content" method="POST">
-            <div class="modal-header"><h5 class="modal-title">Modifier la Rose</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title">Modifier la variété</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
             <div class="modal-body">
                 <input type="hidden" name="action" value="update_rose">
-                <input type="hidden" name="id" id="rose_id">
-                <div class="mb-3"><label>Nom</label><input type="text" name="name" id="rose_name" class="form-control" required></div>
-                <div class="mb-3"><label>Prix</label><input type="number" step="0.01" name="price" id="rose_price" class="form-control" required></div>
-                <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="is_active" id="rose_active"><label class="form-check-label">En vente</label></div>
+                <input type="hidden" name="id" id="edit_rose_id">
+                
+                <div class="mb-3">
+                    <label class="form-label">Nom de la variété</label>
+                    <input type="text" name="name" id="edit_rose_name" class="form-control" required>
+                </div>
             </div>
-            <div class="modal-footer"><button type="submit" class="btn btn-primary">Enregistrer</button></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                <button type="submit" class="btn btn-danger">Enregistrer</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="editPriceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="POST">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title">Modifier le tarif</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="action" value="update_price_rule">
+                <input type="hidden" name="original_quantity" id="edit_price_original_qty">
+                
+                <div class="mb-3">
+                    <label class="form-label">Quantité (Nombre de roses)</label>
+                    <input type="number" name="quantity" id="edit_price_qty" class="form-control" required min="1">
+                    <div class="form-text text-muted small">Attention : ne mettez pas une quantité qui existe déjà ailleurs.</div>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">Prix Total (€)</label>
+                    <input type="number" step="0.01" name="price" id="edit_price_val" class="form-control" required min="0">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                <button type="submit" class="btn btn-primary">Mettre à jour</button>
+            </div>
         </form>
     </div>
 </div>
@@ -607,75 +824,98 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'roses';
 <script>
 document.addEventListener("DOMContentLoaded", function() {
     
-    // --- Vérification que la librairie est bien là ---
+    // ==========================================
+    // 1. DRAG & DROP (MESSAGES)
+    // ==========================================
+    
+    // Vérification que la librairie est bien là
     if (typeof Sortable === 'undefined') {
-        alert("Erreur : La librairie SortableJS ne s'est pas chargée. Vérifiez votre connexion internet.");
-        return;
+        console.warn("Info : La librairie SortableJS n'est pas chargée (normal si pas sur l'onglet messages).");
+    } else {
+        var el = document.getElementById('sortable-messages');
+        if (el) {
+            Sortable.create(el, {
+                animation: 150,
+                handle: '.grab-handle',
+                ghostClass: 'bg-light',
+                
+                onEnd: function (evt) {
+                    var order = [];
+                    var rows = el.querySelectorAll('tr');
+                    rows.forEach(function(row) {
+                        order.push(row.getAttribute('data-id'));
+                    });
+
+                    var formData = new FormData();
+                    formData.append('action', 'reorder_messages');
+                    formData.append('order', JSON.stringify(order));
+
+                    fetch(window.location.href, { 
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(function(response) {
+                        if (!response.ok) throw new Error("Erreur serveur ou réseau");
+                        return response.json();
+                    })
+                    .then(function(data) {
+                        if (data.status === 'success') {
+                            console.log("Ordre sauvegardé.");
+                            evt.item.style.backgroundColor = "#d4edda";
+                            setTimeout(() => { evt.item.style.backgroundColor = ""; }, 1000);
+                        } else {
+                            alert("Erreur : " + (data.message || "Inconnue"));
+                        }
+                    })
+                    .catch(function(error) {
+                        console.error('Erreur:', error);
+                    });
+                }
+            });
+        }
     }
 
-    // --- Initialisation du Drag & Drop ---
-    var el = document.getElementById('sortable-messages');
-    if (el) {
-        Sortable.create(el, {
-            animation: 150,
-            handle: '.grab-handle', // On attrape par la poignée
-            ghostClass: 'bg-light', // Couleur de l'élément fantôme
-            
-            onEnd: function (evt) {
-                // Récupération de l'ordre
-                var order = [];
-                var rows = el.querySelectorAll('tr');
-                rows.forEach(function(row) {
-                    order.push(row.getAttribute('data-id'));
-                });
+    // ==========================================
+    // 2. GESTION DES MODALES (ROSES & PRIX)
+    // ==========================================
 
-                // Envoi AJAX
-                var formData = new FormData();
-                formData.append('action', 'reorder_messages');
-                formData.append('order', JSON.stringify(order));
-
-                // On utilise 'window.location.href' pour être sûr de rester en HTTPS
-                fetch(window.location.href, { 
-                    method: 'POST',
-                    body: formData
-                })
-                .then(function(response) {
-                    // On vérifie si la réponse est OK
-                    if (!response.ok) {
-                        throw new Error("Erreur serveur ou réseau");
-                    }
-                    return response.json();
-                })
-                .then(function(data) {
-                    if (data.status === 'success') {
-                        console.log("Ordre sauvegardé avec succès.");
-                        // Optionnel : un petit effet visuel vert
-                        evt.item.style.backgroundColor = "#d4edda";
-                        setTimeout(() => { evt.item.style.backgroundColor = ""; }, 1000);
-                    } else {
-                        alert("Erreur de sauvegarde : " + (data.message || "Inconnue"));
-                    }
-                })
-                .catch(function(error) {
-                    console.error('Erreur:', error);
-                    alert("Impossible de sauvegarder l'ordre (Problème de connexion ou HTTPS).");
-                });
-            }
-        });
-    }
-
-    // --- JS POUR LES MODALES (Ton code existant) ---
-
-    // 1. Roses
-    window.editRose = function(rose) { // 'window.' rend la fonction accessible globalement
-        document.getElementById('rose_id').value = rose.id;
-        document.getElementById('rose_name').value = rose.name;
-        document.getElementById('rose_price').value = rose.price;
-        document.getElementById('rose_active').checked = rose.is_active == 1;
-        new bootstrap.Modal(document.getElementById('editRoseModal')).show();
+    // Modifier une ROSE (Version Corrigée : Nom uniquement)
+    window.editRose = function(id, name) {
+        // On cible les IDs de la nouvelle modale HTML
+        var idInput = document.getElementById('edit_rose_id');
+        var nameInput = document.getElementById('edit_rose_name');
+        
+        if (idInput && nameInput) {
+            idInput.value = id;
+            nameInput.value = name;
+            new bootstrap.Modal(document.getElementById('editRoseModal')).show();
+        } else {
+            console.error("Erreur : Impossible de trouver les champs de la modale Rose (edit_rose_id/name).");
+        }
     };
 
-    // 2. Classes
+    // Modifier un PRIX (Nouvelle fonction)
+    window.editPrice = function(qty, price) {
+        var qtyOrigInput = document.getElementById('edit_price_original_qty');
+        var qtyInput = document.getElementById('edit_price_qty');
+        var priceInput = document.getElementById('edit_price_val');
+
+        if (qtyOrigInput && qtyInput && priceInput) {
+            qtyOrigInput.value = qty;
+            qtyInput.value = qty;
+            priceInput.value = price;
+            new bootstrap.Modal(document.getElementById('editPriceModal')).show();
+        } else {
+            console.error("Erreur : Impossible de trouver les champs de la modale Prix.");
+        }
+    };
+
+
+    // ==========================================
+    // 3. GESTION DES AUTRES MODALES (CLASSES, SALLES...)
+    // ==========================================
+
+    // Classes
     window.editClass = function(id, name, levelId) {
         document.getElementById('classModalTitle').innerText = 'Modifier la classe';
         document.getElementById('class_action').value = 'update_class';
@@ -695,7 +935,7 @@ document.addEventListener("DOMContentLoaded", function() {
         });
     }
 
-    // 3. Salles
+    // Salles
     window.editRoom = function(id, name, buildId, floorId) {
         document.getElementById('roomModalTitle').innerText = 'Modifier la salle';
         document.getElementById('room_action').value = 'update_room';
@@ -716,7 +956,7 @@ document.addEventListener("DOMContentLoaded", function() {
         });
     }
 
-    // 4. Éditions Simples
+    // Éditions Simples (Niveaux, Bâtiments, Étages)
     window.openSimpleEdit = function(action, id, name) {
         document.getElementById('simple_action').value = action;
         document.getElementById('simple_id').value = id;
@@ -724,9 +964,9 @@ document.addEventListener("DOMContentLoaded", function() {
         new bootstrap.Modal(document.getElementById('simpleEditModal')).show();
     };
 
-    window.editLevel = function(id, name) { openSimpleEdit('update_level', id, name); };
-    window.editBuilding = function(id, name) { openSimpleEdit('update_building', id, name); };
-    window.editFloor = function(id, name) { openSimpleEdit('update_floor', id, name); };
+    window.editLevel = function(id, name) { window.openSimpleEdit('update_level', id, name); };
+    window.editBuilding = function(id, name) { window.openSimpleEdit('update_building', id, name); };
+    window.editFloor = function(id, name) { window.openSimpleEdit('update_floor', id, name); };
 
 });
 </script>

@@ -72,7 +72,13 @@ if ($searchQuery) {
         LEFT JOIN classes c ON r.class_id = c.id
         LEFT JOIN predefined_messages pm ON r.message_id = pm.id
         WHERE o.is_paid = 1 
-        AND (r.dest_nom LIKE :q OR r.dest_prenom LIKE :q)
+        AND (
+            r.dest_nom LIKE :q OR 
+            r.dest_prenom LIKE :q OR 
+            CONCAT(r.dest_prenom, ' ', r.dest_nom) LIKE :q OR
+            o.buyer_nom LIKE :q OR
+            o.buyer_prenom LIKE :q
+        )
     ";
     
     if ($view === 'done') {
@@ -209,16 +215,25 @@ if ($searchQuery) {
 
 <div class="container mt-3">
 
-    <form action="" method="GET" class="mb-3">
-        <input type="hidden" name="view" value="<?php echo $view; ?>">
-        <div class="input-group shadow-sm">
-            <span class="input-group-text bg-white border-end-0"><i class="fas fa-search text-muted"></i></span>
-            <input type="text" name="q" class="form-control border-start-0 ps-0" placeholder="Chercher un élève..." value="<?php echo htmlspecialchars($searchQuery); ?>">
-            <?php if($searchQuery): ?>
-                <a href="delivery.php?view=<?php echo $view; ?>" class="btn btn-outline-secondary bg-white border-start-0">X</a>
+    <div class="row mb-4 align-items-center">
+        <div class="col-12">
+            <h2 class="fw-bold text-success"><i class="fas fa-truck"></i> Distribution</h2>
+            
+            <?php if($view === 'todo'): ?>
+                <p class="text-muted">
+                    <?php if(!empty($searchQuery)): ?>
+                        Résultats de recherche : <strong><?php echo count($recipients); ?></strong> destinataire(s) trouvé(s).
+                    <?php else: ?>
+                        Reste à livrer : <strong><?php echo count($recipients); ?></strong> destinataire(s).
+                    <?php endif; ?>
+                </p>
+            <?php else: ?>
+                <p class="text-muted">
+                    Historique : <strong><?php echo count($recipients); ?></strong> livraison(s) effectuée(s).
+                </p>
             <?php endif; ?>
         </div>
-    </form>
+    </div>
 
     <ul class="nav nav-tabs mb-3">
         <li class="nav-item">
@@ -234,6 +249,34 @@ if ($searchQuery) {
             </a>
         </li>
     </ul>
+
+    <div class="d-flex justify-content-center justify-content-md-end mb-3">
+        <form method="GET" action="delivery.php" class="d-flex" style="max-width: 350px; width: 100%;">
+            <input type="hidden" name="view" value="<?php echo htmlspecialchars($view); ?>">
+
+            <div class="input-group shadow-sm">
+                
+                <input type="text" 
+                       name="q" 
+                       class="form-control rounded-start-pill border-end-0 ps-3 bg-white" 
+                       placeholder="Chercher (Nom, Acheteur...)" 
+                       value="<?php echo htmlspecialchars($searchQuery); ?>">
+                
+                <?php if($searchQuery): ?>
+                    <a href="delivery.php?view=<?php echo $view; ?>" 
+                       class="btn btn-white bg-white border border-start-0 border-end-0 text-danger" 
+                       title="Effacer">
+                        <i class="fas fa-times"></i>
+                    </a>
+                <?php endif; ?>
+
+                <button class="btn btn-primary rounded-end-pill px-3" type="submit">
+                    <i class="fas fa-search"></i>
+                </button>
+
+            </div>
+        </form>
+    </div>
 
     <?php if(!$searchQuery): ?>
         

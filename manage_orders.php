@@ -1,5 +1,5 @@
 <?php
-// admin.php
+// manage_orders.php
 require_once 'db.php';
 require_once 'auth_check.php'; 
 
@@ -8,15 +8,14 @@ checkAccess('cvl');
 // --- 0. DONNÉES DE RÉFÉRENCE ---
 $allClasses = $pdo->query("SELECT id, name FROM classes ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
 $allRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
-// On récupère aussi le prix pour le calcul automatique
-$stmtRoses = $pdo->query("SELECT id, name, price FROM rose_products ORDER BY price");
+
+// MODIF : On ne récupère plus le prix dans rose_products, juste id et name
+$stmtRoses = $pdo->query("SELECT id, name FROM rose_products");
 $allRoseTypes = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
 
-// Création d'un tableau simple [id => prix] pour le calcul rapide
-$rosePrices = [];
-foreach($allRoseTypes as $rt) {
-    $rosePrices[$rt['id']] = $rt['price'];
-}
+// MODIF : On charge la grille tarifaire (Quantité => Prix)
+$stmtPrices = $pdo->query("SELECT quantity, price FROM roses_prices");
+$rosesPriceTable = $stmtPrices->fetchAll(PDO::FETCH_KEY_PAIR); // [1 => 2.00, 3 => 5.00, ...]
 
 $allMessages = $pdo->query("SELECT id, content FROM predefined_messages ORDER BY position ASC, id ASC")->fetchAll(PDO::FETCH_KEY_PAIR);
 
@@ -24,24 +23,17 @@ $allMessages = $pdo->query("SELECT id, content FROM predefined_messages ORDER BY
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['order_id'])) {
     $orderId = intval($_POST['order_id']);
     
-    // Message par défaut
     $msgSuccess = "Action effectuée avec succès.";
 
     if ($_POST['action'] === 'validate_payment') {
-        // On récupère l'ID de l'admin connecté via la session
         $adminId = $_SESSION['user_id'] ?? null; 
-
-        // On met à jour : payé, date de paiement, ET l'ID de l'admin
         $stmt = $pdo->prepare("UPDATE orders SET is_paid = 1, paid_at = NOW(), paid_by_cvl_id = ? WHERE id = ?");
         $stmt->execute([$adminId, $orderId]);
-        
         $msgSuccess = "Paiement validé pour la commande #$orderId !";
     } 
     elseif ($_POST['action'] === 'cancel_payment') {
-        // Si on annule, on remet aussi paid_by_cvl_id à NULL
         $stmt = $pdo->prepare("UPDATE orders SET is_paid = 0, paid_at = NULL, paid_by_cvl_id = NULL WHERE id = ?");
         $stmt->execute([$orderId]);
-        
         $msgSuccess = "Paiement annulé pour la commande #$orderId.";
     }
     elseif ($_POST['action'] === 'edit_order') {
@@ -64,7 +56,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
                     $stmtR = $pdo->prepare("UPDATE order_recipients SET dest_nom = ?, dest_prenom = ?, class_id = ?, is_anonymous = ?, message_id = ? WHERE id = ? AND order_id = ?");
                     $stmtR->execute([$rData['nom'], $rData['prenom'], $destClass, $isAnon, $rData['message_id'], $rId, $orderId]);
 
-                    // 3. Mise à jour Quantités Roses
+                    // 3. Mise à jour Quantités Roses & Calcul du prix par destinataire
+                    $totalRosesForRecipient = 0; // Compteur de roses pour CE destinataire
+
                     if (isset($rData['roses']) && is_array($rData['roses'])) {
                         foreach ($rData['roses'] as $roseLinkId => $qty) {
                             $qty = intval($qty);
@@ -73,18 +67,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
                             $stmtRose = $pdo->prepare("UPDATE recipient_roses SET quantity = ? WHERE id = ?");
                             $stmtRose->execute([$qty, $roseLinkId]);
 
-                            // Récup prix pour recalcul
-                            $stmtType = $pdo->prepare("SELECT rose_product_id FROM recipient_roses WHERE id = ?");
-                            $stmtType->execute([$roseLinkId]);
-                            $prodId = $stmtType->fetchColumn();
+                            // On ajoute au total de roses du destinataire
+                            $totalRosesForRecipient += $qty;
+                        }
+                    }
 
-                            if ($prodId && isset($rosePrices[$prodId])) {
-                                $calculatedTotalPrice += ($qty * $rosePrices[$prodId]);
+                    // --- NOUVEAU CALCUL DU PRIX ---
+                    // On regarde dans la grille tarifaire le prix pour ce nombre de roses
+                    if ($totalRosesForRecipient > 0) {
+                        if (isset($rosesPriceTable[$totalRosesForRecipient])) {
+                            // Prix défini dans la table (ex: 3 roses = 5€)
+                            $calculatedTotalPrice += floatval($rosesPriceTable[$totalRosesForRecipient]);
+                        } else {
+                            // Si la quantité dépasse la grille (ex: 50 roses), on fait un calcul par défaut
+                            // Par exemple : Prix max défini + 2€ par rose supplémentaire
+                            // Ou simple fallback : quantité * 2€
+                            $maxQtyDefined = max(array_keys($rosesPriceTable));
+                            if ($totalRosesForRecipient > $maxQtyDefined) {
+                                // Fallback simple : prix unitaire de base (2€)
+                                $calculatedTotalPrice += ($totalRosesForRecipient * 2.00);
                             }
                         }
                     }
 
-                    // 4. Mise à jour Planning
+                    // 4. Mise à jour Planning (inchangé)
                     if (isset($rData['schedule']) && is_array($rData['schedule'])) {
                         foreach ($rData['schedule'] as $hour => $roomId) {
                             $existingId = $rData['schedule_ids'][$hour] ?? null;
@@ -108,7 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
                 }
             }
 
-            // 5. Mise à jour du PRIX TOTAL
+            // 5. Mise à jour du PRIX TOTAL COMMANDE
             $stmtPrice = $pdo->prepare("UPDATE orders SET total_price = ? WHERE id = ?");
             $stmtPrice->execute([$calculatedTotalPrice, $orderId]);
 
@@ -117,13 +123,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
 
         } catch (Exception $e) {
             $pdo->rollBack();
-            // Redirection erreur
             header("Location: manage_orders.php?msg_error=" . urlencode("Erreur : " . $e->getMessage()));
             exit;
         }
     }
 
-    // REDIRECTION SUCCES
     header("Location: manage_orders.php?msg_success=" . urlencode($msgSuccess));
     exit;
 }
@@ -136,7 +140,9 @@ $stmtUnpaid = $pdo->query("SELECT COUNT(*) FROM orders WHERE is_paid = 0");
 $countUnpaid = $stmtUnpaid->fetchColumn();
 $percentPaid = ($totalOrders > 0) ? round((($totalOrders - $countUnpaid) / $totalOrders) * 100) : 0;
 
-// --- 3. REQUÊTE PRINCIPALE ---
+// --- 3. REQUÊTE PRINCIPALE (AVEC MOTEUR DE RECHERCHE) ---
+$search = isset($_GET['q']) ? trim($_GET['q']) : '';
+
 $sql = "
     SELECT 
         o.id as order_id,
@@ -154,11 +160,32 @@ $sql = "
     LEFT JOIN classes c_buy ON o.buyer_class_id = c_buy.id
     LEFT JOIN classes c_dest ON r.class_id = c_dest.id
     LEFT JOIN predefined_messages pm ON r.message_id = pm.id
-    ORDER BY o.is_paid ASC, o.created_at DESC 
-"; 
+";
+
+// Construction dynamique de la clause WHERE
+$params = [];
+if (!empty($search)) {
+    // On cherche dans : ID commande, Nom/Prénom acheteur, Nom/Prénom destinataire, Classes
+    $sql .= " WHERE 
+        o.id LIKE :s OR 
+        o.buyer_nom LIKE :s OR 
+        o.buyer_prenom LIKE :s OR 
+        CONCAT(o.buyer_prenom, ' ', o.buyer_nom) LIKE :s OR 
+        c_buy.name LIKE :s OR 
+        
+        r.dest_nom LIKE :s OR 
+        r.dest_prenom LIKE :s OR 
+        CONCAT(r.dest_prenom, ' ', r.dest_nom) LIKE :s OR 
+        c_dest.name LIKE :s
+    ";
+    $params[':s'] = '%' . $search . '%';
+}
+
+$sql .= " ORDER BY o.is_paid ASC, o.created_at DESC";
 
 try {
-    $stmt = $pdo->query($sql);
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
     $raw_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) { die("Erreur SQL : " . $e->getMessage()); }
 
@@ -189,12 +216,11 @@ foreach ($raw_results as $row) {
     $stmtRoses->execute([$row['recipient_id']]);
     $roses = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
 
-    // Schedule (Récupération brute)
+    // Schedule
     $stmtSchedule = $pdo->prepare("SELECT rs.id as schedule_id, rs.hour_slot, rs.room_id, rm.name as room_name FROM recipient_schedules rs JOIN rooms rm ON rs.room_id = rm.id WHERE rs.recipient_id = ?");
     $stmtSchedule->execute([$row['recipient_id']]);
     $rawSchedule = $stmtSchedule->fetchAll(PDO::FETCH_ASSOC);
     
-    // Transformation schedule pour accès rapide par heure [8 => ['id'=>1, 'room'=>5], 9 => ...]
     $scheduleMap = [];
     foreach($rawSchedule as $sch) {
         $scheduleMap[$sch['hour_slot']] = [
@@ -216,7 +242,7 @@ foreach ($raw_results as $row) {
         'is_distributed' => $row['is_distributed'],
         'distributed_at' => $row['distributed_at'],
         'roses' => $roses,
-        'schedule_map' => $scheduleMap // On passe la map structurée
+        'schedule_map' => $scheduleMap
     ];
 }
 ?>
@@ -249,7 +275,9 @@ foreach ($raw_results as $row) {
 <div class="container mt-4 mb-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h2 class="fw-bold text-dark mb-0">Tableau de bord CVL 🕵️</h2>
+            <h2 class="fw-bold text-dark mb-0">
+                Tableau de bord CVL <i class="fas fa-clipboard-list ms-2"></i>
+            </h2>
             <span class="text-muted small">Bienvenue, <?php echo htmlspecialchars($_SESSION['prenom'] ?? 'Admin'); ?></span>
         </div>
         <div class="d-flex gap-2">
@@ -263,7 +291,7 @@ foreach ($raw_results as $row) {
     </div>
 
     <div class="row mb-4 g-3">
-        
+    
         <div class="col-md-4">
             <div class="card border-0 shadow-sm h-100" style="background: linear-gradient(135deg, #198754 0%, #20c997 100%); color: white;">
                 <div class="card-body p-3 d-flex justify-content-between align-items-center">
@@ -271,7 +299,8 @@ foreach ($raw_results as $row) {
                         <h6 class="text-white-50 text-uppercase mb-1" style="font-size: 0.8rem; letter-spacing: 1px;">Cagnotte Totale</h6>
                         <h2 class="fw-bold mb-0"><?php echo number_format($totalRevenue, 2); ?> €</h2>
                     </div>
-                    <div class="rounded-circle bg-white bg-opacity-25 p-3">
+                    <div class="rounded-circle bg-white bg-opacity-25 d-flex align-items-center justify-content-center flex-shrink-0" 
+                        style="width: 60px; height: 60px;">
                         <i class="fas fa-euro-sign fa-2x"></i>
                     </div>
                 </div>
@@ -286,7 +315,7 @@ foreach ($raw_results as $row) {
                             <h6 class="text-muted text-uppercase mb-1" style="font-size: 0.8rem; letter-spacing: 1px;">En attente paiement</h6>
                             <h2 class="fw-bold mb-0 text-dark"><?php echo $countUnpaid; ?> <small class="text-muted fs-6">commandes</small></h2>
                         </div>
-                        <div class="text-<?php echo ($countUnpaid > 0) ? 'warning' : 'success'; ?>">
+                        <div class="text-<?php echo ($countUnpaid > 0) ? 'warning' : 'success'; ?> flex-shrink-0">
                             <i class="fas fa-exclamation-circle fa-2x"></i>
                         </div>
                     </div>
@@ -306,7 +335,8 @@ foreach ($raw_results as $row) {
                         <h6 class="text-white-50 text-uppercase mb-1" style="font-size: 0.8rem; letter-spacing: 1px;">Volume Roses</h6>
                         <h2 class="fw-bold mb-0"><?php echo $totalRoses; ?> 🌹</h2>
                     </div>
-                    <div class="rounded-circle bg-white bg-opacity-25 p-3">
+                    <div class="rounded-circle bg-white bg-opacity-25 d-flex align-items-center justify-content-center flex-shrink-0" 
+                        style="width: 60px; height: 60px;">
                         <i class="fas fa-box-open fa-2x"></i>
                     </div>
                 </div>
@@ -325,10 +355,52 @@ foreach ($raw_results as $row) {
     </div>
 
     <div class="card shadow border-0 rounded-3">
-        <div class="card-header bg-white py-3">
-            <h5 class="mb-0 fw-bold text-primary">📦 Commandes & Livraisons</h5>
+        <div class="card-header bg-white py-3 d-flex flex-wrap justify-content-center justify-content-md-between align-items-center gap-3">
+            
+            <div class="d-flex align-items-center gap-3">
+                <h5 class="mb-0 fw-bold text-primary">📦 Commandes & Livraisons</h5>
+                
+                <?php if(!empty($search)): ?>
+                    <span class="badge bg-warning text-dark animate__animated animate__fadeIn shadow-sm">
+                        <?php echo count($groupedOrders); ?> résultat(s)
+                    </span>
+                <?php endif; ?>
+            </div>
+
+            <form method="GET" action="manage_orders.php" class="d-flex mt-2 mt-md-0 mx-auto mx-md-0 ms-md-auto" style="max-width: 350px; width: 100%;">
+                <div class="input-group">
+                    
+                    <input type="text" 
+                           name="q" 
+                           class="form-control rounded-start-pill border-end-0 ps-3 bg-light" 
+                           placeholder="Rechercher..." 
+                           value="<?php echo htmlspecialchars($search); ?>">
+                    
+                    <?php if(!empty($search)): ?>
+                        <a href="manage_orders.php" 
+                           class="btn btn-light border border-start-0 border-end-0 text-danger" 
+                           title="Effacer">
+                            <i class="fas fa-times"></i>
+                        </a>
+                    <?php endif; ?>
+
+                    <button class="btn btn-primary rounded-end-pill px-3" type="submit">
+                        <i class="fas fa-search"></i>
+                    </button>
+
+                </div>
+            </form>
         </div>
+
         <div class="card-body p-0">
+            
+            <?php if (!empty($search) && empty($groupedOrders)): ?>
+                <div class="alert alert-warning m-3 border-0 shadow-sm">
+                    <i class="fas fa-search mb-0 me-2"></i> Aucune commande ne correspond à votre recherche "<strong><?php echo htmlspecialchars($search); ?></strong>".
+                    <a href="manage_orders.php" class="alert-link">Tout afficher</a>.
+                </div>
+            <?php endif; ?>
+
             <div class="table-responsive">
                 <table class="table table-bordered mb-0 align-middle table-admin">
                     <thead>
@@ -338,8 +410,8 @@ foreach ($raw_results as $row) {
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if (empty($groupedOrders)): ?>
-                            <tr><td colspan="2" class="text-center p-5 text-muted">Aucune commande.</td></tr>
+                        <?php if (empty($groupedOrders) && empty($search)): ?>
+                            <tr><td colspan="2" class="text-center p-5 text-muted">Aucune commande enregistrée pour le moment.</td></tr>
                         <?php else: ?>
                             <?php foreach($groupedOrders as $order): ?>
                             <tr>

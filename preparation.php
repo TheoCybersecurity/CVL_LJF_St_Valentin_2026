@@ -57,6 +57,8 @@ $view = isset($_GET['view']) ? $_GET['view'] : 'todo';
 $levelFilter = isset($_GET['level']) ? $_GET['level'] : 'all';
 
 // --- 3. REQUÊTE SQL ---
+$search = isset($_GET['q']) ? trim($_GET['q']) : '';
+
 $sql = "
     SELECT 
         r.id as recipient_id, r.dest_nom, r.dest_prenom, r.is_anonymous, r.prepared_at, r.prepared_by_cvl_id,
@@ -73,28 +75,50 @@ $sql = "
     WHERE o.is_paid = 1 
 ";
 
+// Filtre Vue (A faire / Fait)
 if ($view === 'done') {
     $sql .= " AND r.is_prepared = 1 ";
 } else {
     $sql .= " AND r.is_prepared = 0 ";
 }
 
+// Filtre Niveau (2nde, 1ere...)
 if ($levelFilter !== 'all') {
     $sql .= " AND cl.group_alias = :filter ";
 }
 
+// Filtre Recherche (Nouveau)
+if (!empty($search)) {
+    $sql .= " AND (
+        r.dest_nom LIKE :s OR 
+        r.dest_prenom LIKE :s OR 
+        CONCAT(r.dest_prenom, ' ', r.dest_nom) LIKE :s OR
+        c.name LIKE :s OR
+        o.buyer_nom LIKE :s OR 
+        o.buyer_prenom LIKE :s OR
+        r.id LIKE :s
+    ) ";
+}
+
+// Tri
 if ($view === 'done') {
     $sql .= " ORDER BY r.prepared_at DESC "; 
 } else {
     $sql .= " ORDER BY c.name ASC, r.dest_nom ASC ";
 }
 
+// Exécution avec paramètres dynamiques
 $stmt = $pdo->prepare($sql);
+$params = [];
+
 if ($levelFilter !== 'all') {
-    $stmt->execute(['filter' => $levelFilter]);
-} else {
-    $stmt->execute();
+    $params[':filter'] = $levelFilter;
 }
+if (!empty($search)) {
+    $params[':s'] = '%' . $search . '%';
+}
+
+$stmt->execute($params);
 $rawResults = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // --- 4. REGROUPEMENT ---
@@ -153,8 +177,9 @@ foreach ($rawResults as $row) {
 <div class="container my-4">
     
     <div class="row mb-4 align-items-center">
-        <div class="col-md-7">
-            <h2 class="fw-bold"><i class="fas fa-boxes"></i> Préparation</h2>
+       <div class="col-md-7">
+            <h2 class="fw-bold text-primary"><i class="fas fa-boxes"></i> Préparation</h2>
+            
             <?php if($view === 'todo'): ?>
                 <p class="text-muted">Reste à faire : <strong><?php echo $totalRoses; ?></strong> roses.</p>
             <?php else: ?>
@@ -192,6 +217,33 @@ foreach ($rawResults as $row) {
             </a>
         </li>
     </ul>
+
+    <div class="d-flex justify-content-center justify-content-md-end mb-3">
+        <form method="GET" action="preparation.php" class="d-flex" style="max-width: 350px; width: 100%;">
+            <input type="hidden" name="view" value="<?php echo htmlspecialchars($view); ?>">
+            <input type="hidden" name="level" value="<?php echo htmlspecialchars($levelFilter); ?>">
+
+            <div class="input-group shadow-sm">
+                <input type="text" 
+                       name="q" 
+                       class="form-control rounded-start-pill border-end-0 ps-3 bg-white" 
+                       placeholder="Chercher (Nom, Classe...)" 
+                       value="<?php echo htmlspecialchars($search); ?>">
+                
+                <?php if(!empty($search)): ?>
+                    <a href="preparation.php?view=<?php echo $view; ?>&level=<?php echo $levelFilter; ?>" 
+                       class="btn btn-white bg-white border border-start-0 border-end-0 text-danger" 
+                       title="Effacer">
+                        <i class="fas fa-times"></i>
+                    </a>
+                <?php endif; ?>
+
+                <button class="btn btn-primary rounded-end-pill px-3" type="submit">
+                    <i class="fas fa-search"></i>
+                </button>
+            </div>
+        </form>
+    </div>
 
     <div class="btn-group mb-4 w-100 shadow-sm">
         <a href="?view=<?php echo $view; ?>&level=all" class="btn btn-light <?php echo $levelFilter=='all'?'active fw-bold border-primary':''; ?>">Tout</a>
