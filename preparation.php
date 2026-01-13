@@ -168,6 +168,63 @@ foreach ($rawResults as $row) {
         .badge-rose-pink { background-color: #ffc2d1; color: #880e4f; }
         .nav-tabs .nav-link { color: #495057; font-weight: bold; cursor: pointer; }
         .nav-tabs .nav-link.active { color: #d63384; border-bottom: 3px solid #d63384; background: transparent; }
+        
+        /* Scroll horizontal fluide */
+        .scroll-container {
+            overflow-x: auto;
+            white-space: nowrap;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: 5px;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        .scroll-container::-webkit-scrollbar { display: none; }
+
+        /* --- ANIMATION MENU PDF (Correction Saut/Téléportation) --- */
+        .pdf-dropdown-menu {
+            /* 1. Style Visuel */
+            background-color: #fff !important;
+            border: 1px solid rgba(0,0,0,.15);
+            border-radius: 0.375rem;
+            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+
+            /* 2. Positionnement FORCÉ (Stop la téléportation) */
+            /* On prend le contrôle total sur Bootstrap */
+            position: absolute !important;
+            top: 100% !important;     /* Juste sous le bouton */
+            right: 0 !important;      /* Aligné à droite du bouton */
+            left: auto !important;    /* On ignore l'alignement gauche */
+            margin-top: 8px !important; /* Petit espace sous le bouton */
+            transform: none !important; /* On interdit à Bootstrap d'utiliser transform pour la position */
+
+            /* 3. Animation (État FERMÉ) */
+            display: block !important; /* Toujours présent dans le DOM */
+            visibility: hidden;
+            opacity: 0;
+            /* On commence un peu plus haut (-10px) pour glisser vers le bas */
+            transform: translateY(-10px) !important; 
+            
+            transition: all 0.2s ease-in-out;
+            pointer-events: none;
+        }
+
+        /* 4. Animation (État OUVERT) */
+        .pdf-dropdown-menu.show {
+            visibility: visible;
+            opacity: 1;
+            /* On revient à la position 0 (glissement terminé) */
+            transform: translateY(0) !important;
+            pointer-events: auto;
+        }
+
+        /* 5. Liens */
+        .pdf-dropdown-menu .dropdown-item {
+            color: #212529 !important;
+            transition: background-color 0.2s;
+        }
+        .pdf-dropdown-menu .dropdown-item:hover {
+            background-color: #f8f9fa;
+        }
     </style>
 </head>
 <body>
@@ -191,7 +248,7 @@ foreach ($rawResults as $row) {
                 <button class="btn btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown">
                     <i class="fas fa-print"></i> Télécharger PDF
                 </button>
-                <ul class="dropdown-menu">
+                <ul class="dropdown-menu pdf-dropdown-menu">
                     <li><a class="dropdown-item" target="_blank" href="print_labels.php?level=2nde">Secondes</a></li>
                     <li><a class="dropdown-item" target="_blank" href="print_labels.php?level=1ere">Premières</a></li>
                     <li><a class="dropdown-item" target="_blank" href="print_labels.php?level=term">Terminales</a></li>
@@ -245,12 +302,14 @@ foreach ($rawResults as $row) {
         </form>
     </div>
 
-    <div class="btn-group mb-4 w-100 shadow-sm">
-        <a href="?view=<?php echo $view; ?>&level=all" class="btn btn-light <?php echo $levelFilter=='all'?'active fw-bold border-primary':''; ?>">Tout</a>
-        <a href="?view=<?php echo $view; ?>&level=2nde" class="btn btn-light <?php echo $levelFilter=='2nde'?'active fw-bold border-primary':''; ?>">Secondes</a>
-        <a href="?view=<?php echo $view; ?>&level=1ere" class="btn btn-light <?php echo $levelFilter=='1ere'?'active fw-bold border-primary':''; ?>">Premières</a>
-        <a href="?view=<?php echo $view; ?>&level=term" class="btn btn-light <?php echo $levelFilter=='term'?'active fw-bold border-primary':''; ?>">Terminales</a>
-        <a href="?view=<?php echo $view; ?>&level=autre" class="btn btn-light <?php echo $levelFilter=='autre'?'active fw-bold border-primary':''; ?>">Autres</a>
+    <div class="scroll-container mb-4">
+        <div class="btn-group shadow-sm w-100" style="min-width: max-content;">
+            <a href="?view=<?php echo $view; ?>&level=all" class="btn btn-light <?php echo $levelFilter=='all'?'active fw-bold border-primary':''; ?>">Tout</a>
+            <a href="?view=<?php echo $view; ?>&level=2nde" class="btn btn-light <?php echo $levelFilter=='2nde'?'active fw-bold border-primary':''; ?>">Secondes</a>
+            <a href="?view=<?php echo $view; ?>&level=1ere" class="btn btn-light <?php echo $levelFilter=='1ere'?'active fw-bold border-primary':''; ?>">Premières</a>
+            <a href="?view=<?php echo $view; ?>&level=term" class="btn btn-light <?php echo $levelFilter=='term'?'active fw-bold border-primary':''; ?>">Terminales</a>
+            <a href="?view=<?php echo $view; ?>&level=autre" class="btn btn-light <?php echo $levelFilter=='autre'?'active fw-bold border-primary':''; ?>">Autres</a>
+        </div>
     </div>
 
     <?php if (empty($groupedByClass)): ?>
