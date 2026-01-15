@@ -1,78 +1,238 @@
 // assets/js/main.js
 
 let cart = [];
-let editingIndex = null; // NULL = Mode Création, Entier = Mode Édition
+let editingIndex = null;
 
-// --- 1. GESTION DE L'OUVERTURE DE LA MODALE ---
+// --- GESTION DE LA RECHERCHE (AUTOCOMPLETION) ---
+const searchInput = document.getElementById('search_student');
+const searchResults = document.getElementById('searchResults');
+let debounceTimeout = null;
 
-// Cette fonction doit être appelée par le bouton "Ajouter une personne" dans order.php
-// Elle garantit qu'on part d'un formulaire vide.
-function openAddModal() {
-    editingIndex = null; // On est en mode création
-    resetModalForm();
+if (searchInput) {
+    searchInput.addEventListener('input', function() {
+        const query = this.value.trim();
+        
+        // Si le champ est vide, on cache les résultats mais on ne reset pas tout 
+        // (l'utilisateur utilise la croix X pour reset)
+        if (query.length === 0) {
+            document.getElementById('searchResults').style.display = 'none';
+            return;
+        }
+
+        clearTimeout(debounceTimeout);
+        debounceTimeout = setTimeout(() => {
+            fetch(`api/search_student?q=${encodeURIComponent(query)}`) // .php ajouté par sécurité
+                .then(r => r.json())
+                .then(data => {
+                    const searchResults = document.getElementById('searchResults');
+                    searchResults.innerHTML = '';
+                    
+                    if (data.length > 0) {
+                        searchResults.style.display = 'block';
+                        
+                        data.forEach(student => {
+                            const div = document.createElement('div');
+                            // J'ajoute des classes Bootstrap pour l'espacement et le curseur
+                            div.className = 'search-result-item p-2 border-bottom action-pointer';
+                            div.style.cursor = 'pointer'; 
+                            
+                            // LOGIQUE D'AFFICHAGE DE LA CLASSE
+                            let classBadge = '';
+                            
+                            // Note : on utilise student.class_name (renvoyé par le JOIN en PHP)
+                            if (student.class_name) {
+                                classBadge = `<span class="badge bg-success ms-2">${student.class_name}</span>`;
+                            } else {
+                                classBadge = `<span class="badge bg-warning text-dark ms-2">Classe à définir</span>`;
+                            }
+
+                            // Structure Flexbox : Nom à gauche, Badge à droite
+                            div.innerHTML = `
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span><strong>${student.nom}</strong> ${student.prenom}</span>
+                                    ${classBadge}
+                                </div>
+                            `;
+                            
+                            // Au clic, on lance la fonction de sélection
+                            div.onclick = () => selectStudent(student);
+                            
+                            // Effet de survol (hover) simple en JS
+                            div.onmouseover = () => div.classList.add('bg-light');
+                            div.onmouseout = () => div.classList.remove('bg-light');
+                            
+                            searchResults.appendChild(div);
+                        });
+                    } else {
+                        searchResults.style.display = 'none';
+                    }
+                })
+                .catch(err => console.error("Erreur recherche:", err));
+        }, 300); // Délai de 300ms
+    });
+
+    // Cacher si on clique ailleurs
+    document.addEventListener('click', function(e) {
+        const searchResults = document.getElementById('searchResults');
+        if (e.target !== searchInput && e.target !== searchResults && !searchResults.contains(e.target)) {
+            searchResults.style.display = 'none';
+        }
+    });
+}
+
+// A. Update de la fonction selectStudent
+function selectStudent(student) {
+    // 1. Remplir Nom/Prénom
+    const elNom = document.getElementById('dest_nom');
+    const elPrenom = document.getElementById('dest_prenom');
+    const selectClasse = document.getElementById('dest_classe'); // Cible le select
     
-    // On change le titre et le bouton pour l'UX
+    elNom.value = student.nom;
+    elPrenom.value = student.prenom;
+    document.getElementById('dest_schedule_id').value = student.id;
+
+    // 2. VERROUILLAGE (Nom, Prénom ET Classe)
+    elNom.readOnly = true;
+    elPrenom.readOnly = true;
+    
+    // Ajout du style gris
+    elNom.classList.add('bg-secondary-subtle');
+    elPrenom.classList.add('bg-secondary-subtle');
+    selectClasse.classList.add('bg-secondary-subtle'); 
+    
+    // On affiche le bouton RESET
+    document.getElementById('btn-reset-search').style.display = 'block';
+
+    // 3. SELECTION ET VERROUILLAGE DE LA CLASSE
+    if (student.class_id && student.class_id > 0) {
+        selectClasse.value = student.class_id;
+        selectClasse.disabled = true; // <-- ON BLOQUE LA MODIFICATION
+    } else {
+        // Si l'élève est trouvé mais n'a pas de classe en base (ex: prof ou erreur import)
+        // On laisse le choix libre, mais on ne grise pas
+        selectClasse.value = "";
+        selectClasse.disabled = false; 
+        selectClasse.classList.remove('bg-secondary-subtle'); 
+    }
+    
+    // 4. Interface
+    // Mise à jour de la barre de recherche
+    let displayName = student.nom + ' ' + student.prenom;
+    if (student.class_name) {
+        displayName += ' (' + student.class_name + ')';
+    }
+    
+    document.getElementById('searchResults').style.display = 'none';
+    document.getElementById('search_student').value = displayName;
+    
+    document.getElementById('scheduleSection').style.display = 'none';
+    document.getElementById('autoScheduleMsg').style.display = 'block';
+    document.getElementById('manual-mode-hint').style.display = 'none';
+}
+
+// B. Update de la fonction resetToManualMode
+function resetToManualMode() {
+    document.getElementById('dest_schedule_id').value = "";
+    
+    const elNom = document.getElementById('dest_nom');
+    const elPrenom = document.getElementById('dest_prenom');
+    const selectClasse = document.getElementById('dest_classe');
+
+    // DÉVERROUILLAGE TOTAL
+    elNom.readOnly = false;
+    elPrenom.readOnly = false;
+    selectClasse.disabled = false; // <-- ON DÉBLOQUE
+
+    // On retire le gris
+    elNom.classList.remove('bg-secondary-subtle');
+    elPrenom.classList.remove('bg-secondary-subtle');
+    selectClasse.classList.remove('bg-secondary-subtle');
+
+    // Vidage des champs
+    elNom.value = "";
+    elPrenom.value = "";
+    selectClasse.value = "";
+
+    // Interface
+    document.getElementById('scheduleSection').style.display = 'block';
+    document.getElementById('autoScheduleMsg').style.display = 'none';
+    document.getElementById('btn-reset-search').style.display = 'none';
+    document.getElementById('manual-mode-hint').style.display = 'block';
+}
+
+// C. Nouvelle fonction pour le bouton "X"
+function fullResetSearch() {
+    document.getElementById('search_student').value = "";
+    resetToManualMode();
+}
+
+// --- GESTION DE LA MODALE ---
+
+function openAddModal() {
+    editingIndex = null;
+    resetModalForm();
     document.getElementById('modalTitleLabel').innerText = "Ajouter un destinataire";
     document.getElementById('btn-save-recipient').innerText = "Ajouter cette personne";
     
+    // Reset spécifique recherche
+    resetToManualMode();
+    if(searchInput) searchInput.value = "";
+
     const modal = new bootstrap.Modal(document.getElementById('addRecipientModal'));
     modal.show();
 }
 
-// Cette fonction est appelée quand on clique sur le bouton "Modifier" d'une carte
 function editRecipient(index) {
-    editingIndex = index; // On sauvegarde qui on modifie
-    const item = cart[index]; // On récupère les données
+    editingIndex = index;
+    const item = cart[index];
     
-    // A. Remplissage Infos de base
     document.getElementById('dest_nom').value = item.nom;
     document.getElementById('dest_prenom').value = item.prenom;
     document.getElementById('dest_classe').value = item.classId;
+    document.getElementById('dest_schedule_id').value = item.scheduleId || ""; // Important
     
-    // B. Remplissage Message
     document.getElementById('dest_message').value = item.messageId;
     document.getElementById('dest_anonyme').checked = item.isAnonymous;
 
-    // C. Remplissage Roses
-    // D'abord on remet tout à 0
+    // Gestion Affichage Horaire
+    if (item.scheduleId) {
+        // C'est un profil BDD
+        document.getElementById('scheduleSection').style.display = 'none';
+        document.getElementById('autoScheduleMsg').style.display = 'block';
+    } else {
+        // C'est un profil Manuel
+        document.getElementById('scheduleSection').style.display = 'block';
+        document.getElementById('autoScheduleMsg').style.display = 'none';
+        
+        // Remplir les horaires manuels
+        document.querySelectorAll('.schedule-input').forEach(select => select.value = "");
+        item.schedule.forEach(slot => {
+            const select = document.querySelector(`.schedule-input[data-hour="${slot.hour}"]`);
+            if (select) select.value = slot.roomId;
+        });
+    }
+
+    // Remplissage Roses
     document.querySelectorAll('.rose-input').forEach(input => input.value = 0);
-    // Ensuite on remplit celles du destinataire
     item.roses.forEach(rose => {
-        // On cherche l'input qui a le data-id correspondant
         const input = document.querySelector(`.rose-input[data-id="${rose.id}"]`);
-        if (input) {
-            input.value = rose.qty;
-        }
+        if (input) input.value = rose.qty;
     });
 
-    // D. Remplissage Emploi du temps
-    // D'abord on vide tout
-    document.querySelectorAll('.schedule-input').forEach(select => select.value = "");
-    // Ensuite on remplit
-    item.schedule.forEach(slot => {
-        // On cherche le select qui correspond à l'heure (data-hour)
-        const select = document.querySelector(`.schedule-input[data-hour="${slot.hour}"]`);
-        if (select) {
-            select.value = slot.roomId;
-        }
-    });
-
-    // E. UX : Mise à jour des textes
     document.getElementById('modalTitleLabel').innerText = "Modifier le destinataire";
     document.getElementById('btn-save-recipient').innerText = "Mettre à jour";
 
-    // F. Ouverture Modale
     const modal = new bootstrap.Modal(document.getElementById('addRecipientModal'));
     modal.show();
 }
 
-// --- 2. SAUVEGARDE (AJOUT ou MODIFICATION) ---
+// --- AJOUT AU PANIER ---
 
 function addRecipientToCart() {
-    // 1. Validation basique
     const elNom = document.getElementById('dest_nom');
     const elPrenom = document.getElementById('dest_prenom');
     const elClasse = document.getElementById('dest_classe');
+    const scheduleId = document.getElementById('dest_schedule_id').value; // Peut être vide
 
     if (!elNom || !elPrenom || !elClasse) return;
 
@@ -90,36 +250,31 @@ function addRecipientToCart() {
         return;
     }
 
-    // 2. Emploi du temps
+    // Gestion Horaire (Seulement si PAS d'ID BDD)
     let schedule = [];
-    let hasAtLeastOneSlot = false;
-    document.querySelectorAll('.schedule-input').forEach(select => {
-        const roomId = select.value;
-        if(roomId) {
-            hasAtLeastOneSlot = true;
-            schedule.push({
-                hour: parseInt(select.dataset.hour),
-                roomId: roomId,
-                roomName: (typeof roomsMap !== 'undefined') ? roomsMap[roomId] : 'Salle inconnue' 
-            });
-        }
-    });
-
-    if (!hasAtLeastOneSlot && !confirm("Aucune salle indiquée.\nContinuer sans savoir où trouver la personne ?")) {
-        return;
+    if (!scheduleId) {
+        let hasAtLeastOneSlot = false;
+        document.querySelectorAll('.schedule-input').forEach(select => {
+            const roomId = select.value;
+            if(roomId) {
+                hasAtLeastOneSlot = true;
+                schedule.push({
+                    hour: parseInt(select.dataset.hour),
+                    roomId: roomId,
+                    roomName: (typeof roomsMap !== 'undefined') ? roomsMap[roomId] : 'Salle inconnue'
+                });
+            }
+        });
+        if (!hasAtLeastOneSlot && !confirm("Aucune salle indiquée.\nContinuer sans savoir où trouver la personne ?")) return;
     }
 
-    // 3. Roses
+    // Gestion Roses
     let roses = [];
     let totalQtyRecipient = 0;
     document.querySelectorAll('.rose-input').forEach(input => {
         const qty = parseInt(input.value);
         if (qty > 0) {
-            roses.push({
-                id: input.dataset.id,
-                name: input.dataset.name,
-                qty: qty
-            });
+            roses.push({ id: input.dataset.id, name: input.dataset.name, qty: qty });
             totalQtyRecipient += qty;
         }
     });
@@ -129,37 +284,26 @@ function addRecipientToCart() {
         return;
     }
 
-    // 4. CRÉATION DE L'OBJET
+    // OBJET FINAL
     const recipientObj = {
-        tempId: (editingIndex !== null) ? cart[editingIndex].tempId : Date.now(), // On garde l'ID si modif
+        tempId: (editingIndex !== null) ? cart[editingIndex].tempId : Date.now(),
         nom, prenom, classId, className,
-        schedule,
-        messageId, messageText, isAnonymous, 
-        roses, 
-        totalQty: totalQtyRecipient 
+        scheduleId: scheduleId, // L'ID de la BDD (si trouvé)
+        schedule, // L'horaire manuel (si pas trouvé)
+        messageId, messageText, isAnonymous, roses, totalQty: totalQtyRecipient
     };
 
-    // 5. LOGIQUE AJOUT vs MODIFICATION
-    if (editingIndex !== null) {
-        // Mode ÉDITION : On remplace l'existant
-        cart[editingIndex] = recipientObj;
-        editingIndex = null; // On reset l'index
-    } else {
-        // Mode CRÉATION : On ajoute à la fin
-        cart.push(recipientObj);
-    }
+    if (editingIndex !== null) cart[editingIndex] = recipientObj;
+    else cart.push(recipientObj);
     
-    // 6. Finalisation
+    editingIndex = null;
     renderCart();
     resetModalForm();
     
-    // Fermeture propre de la modale
     const modalEl = document.getElementById('addRecipientModal');
     const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
     modal.hide();
 }
-
-// --- 3. AFFICHAGE DU PANIER ---
 
 function renderCart() {
     const container = document.getElementById('recipients-list');
@@ -170,7 +314,6 @@ function renderCart() {
     
     container.innerHTML = '';
     
-    // Calcul Global
     let grandTotalRoses = 0;
     cart.forEach(item => grandTotalRoses += item.totalQty);
 
@@ -189,33 +332,34 @@ function renderCart() {
         cart.forEach((item, index) => {
             let rosesSummary = item.roses.map(r => `<span class="badge bg-pink text-dark border border-danger-subtle me-1">${r.qty} x ${r.name}</span>`).join(' ');
             
-            let scheduleHtml = '<ul class="mb-0 ps-3 small text-muted">';
-            item.schedule.forEach(slot => {
-                scheduleHtml += `<li>${slot.hour}h : ${slot.roomName}</li>`;
-            });
-            if(item.schedule.length === 0) scheduleHtml = '<em class="small text-muted">Aucun créneau</em>';
-            else scheduleHtml += '</ul>';
+            // Affichage de la localisation
+            let locHtml = "";
+            if (item.scheduleId) {
+                locHtml = '<span class="badge bg-success">📅 Horaire importé</span>';
+            } else {
+                if(item.schedule.length > 0) {
+                    locHtml = '<ul class="mb-0 ps-3 small text-muted">';
+                    item.schedule.forEach(slot => { locHtml += `<li>${slot.hour}h : ${slot.roomName}</li>`; });
+                    locHtml += '</ul>';
+                } else {
+                    locHtml = '<em class="small text-muted">Aucune info</em>';
+                }
+            }
 
             container.innerHTML += `
                 <div class="col-md-6">
                     <div class="card rose-card h-100 shadow-sm border-0">
                         <div class="card-body position-relative">
-                            
                             <div class="position-absolute top-0 end-0 m-2">
-                                <button class="btn btn-sm btn-outline-secondary me-1" onclick="editRecipient(${index})" title="Modifier">
-                                    ✏️
-                                </button>
+                                <button class="btn btn-sm btn-outline-secondary me-1" onclick="editRecipient(${index})" title="Modifier">✏️</button>
                                 <button class="btn-close" onclick="removeRecipient(${index})" aria-label="Supprimer"></button>
                             </div>
-                            
                             <h5 class="card-title text-danger fw-bold pe-5">${item.prenom} ${item.nom}</h5>
                             <h6 class="card-subtitle mb-2 text-muted">${item.className}</h6>
-                            
                             <div class="card-text mt-3">
                                 <div class="mb-2">${rosesSummary}</div>
-                                <div class="mb-2"><strong>💌 Message :</strong> ${item.messageId ? item.messageText : '<span class="text-muted">Aucun</span>'}</div>
-                                <div class="mb-2"><strong>📍 Où le trouver :</strong> ${scheduleHtml}</div>
-                                ${item.isAnonymous ? '<span class="badge bg-dark">🕵️ Anonyme</span>' : '<span class="badge bg-success">✍️ Signé</span>'}
+                                <div class="mb-2"><strong>📍 :</strong> ${locHtml}</div>
+                                ${item.isAnonymous ? '<span class="badge bg-dark">🕵️ Anonyme</span>' : ''}
                             </div>
                         </div>
                     </div>
@@ -238,7 +382,12 @@ function resetModalForm() {
     const form = document.getElementById('recipientForm');
     if (form) form.reset();
     document.querySelectorAll('.rose-input').forEach(i => i.value = 0);
-    document.querySelectorAll('.schedule-input').forEach(s => s.value = "");
+    // On vide l'ID caché pour revenir en mode manuel par défaut
+    document.getElementById('dest_schedule_id').value = ""; 
+    document.getElementById('scheduleSection').style.display = 'block';
+    document.getElementById('autoScheduleMsg').style.display = 'none';
+    if(searchInput) searchInput.value = "";
+    if(searchResults) searchResults.style.display = 'none';
 }
 
 // Validation Commande
@@ -261,35 +410,27 @@ document.getElementById('btn-validate-order').addEventListener('click', function
     btn.innerHTML = "⏳ Enregistrement...";
 
     const currentPath = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/'));
-    const apiUrl = window.location.origin + currentPath + '/api/submit_order';
+    const apiUrl = window.location.origin + currentPath + '/api/submit_order'; // .php ajouté par sécurité
 
     fetch(apiUrl, { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ buyerNom, buyerPrenom, buyerClassId, cart })
     })
-    .then(r => r.text())
-    .then(text => {
-        try {
-            const data = JSON.parse(text);
-            if (data.success) {
-                alert("Commande validée avec succès !");
-                window.location.href = 'index.php?msg_success=Commande enregistrée !'; 
-            } else {
-                alert("Erreur Serveur : " + (data.message || "Erreur inconnue"));
-                btn.disabled = false;
-                btn.innerHTML = "✅ Valider et Payer";
-            }
-        } catch (e) {
-            console.error("Réponse invalide:", text);
-            alert("Erreur technique serveur.");
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert("Commande validée avec succès !");
+            window.location.href = 'index.php?msg_success=Commande enregistrée !'; 
+        } else {
+            alert("Erreur Serveur : " + (data.message || "Erreur inconnue"));
             btn.disabled = false;
             btn.innerHTML = "✅ Valider et Payer";
         }
     })
     .catch(e => {
         console.error(e);
-        alert("Erreur réseau.");
+        alert("Erreur réseau ou réponse invalide.");
         btn.disabled = false;
         btn.innerHTML = "✅ Valider et Payer";
     });
