@@ -35,15 +35,20 @@ try {
     }
 
     // 3. Récupérer les destinataires (Nouvelle structure)
-    // On part de order_recipients (le lien)
-    // On joint recipients (pour le nom/prénom)
-    // On joint classes (pour le nom de la classe)
-    // On joint predefined_messages (pour le texte du message)
+    // MODIFICATION ICI : Ajout des champs de statut et dates (is_prepared, prepared_at, etc.)
     $stmtDest = $pdo->prepare("
         SELECT 
             ort.id as order_recipient_id, -- L'ID de la ligne de commande
             ort.is_anonymous,
             ort.message_id,
+            
+            -- AJOUTS POUR LA TIMELINE --
+            ort.is_prepared,
+            ort.prepared_at,
+            ort.is_distributed,
+            ort.distributed_at,
+            -- FIN AJOUTS --
+
             r.id as student_id,           -- L'ID de la personne (pour chercher l'emploi du temps)
             r.nom, 
             r.prenom, 
@@ -104,7 +109,7 @@ try {
         $dest['schedule'] = $scheduleList;
     }
 
-    // 5. Récupérer TOUTES les salles (pour le select du mode édition)
+    // 5. Récupérer TOUTES les salles (pour le select du mode édition, si utilisé ailleurs)
     $stmtAllRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name ASC");
     $allRooms = $stmtAllRooms->fetchAll(PDO::FETCH_ASSOC);
 

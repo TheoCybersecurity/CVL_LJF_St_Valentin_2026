@@ -19,7 +19,6 @@ if (isset($_COOKIE['jwt'])) {
 }
 
 // --- RECUPERATION DES COMMANDES ---
-// On utilise SUM pour compter combien de destinataires ont passé chaque étape
 $sql = "
     SELECT 
         o.*, 
@@ -109,7 +108,7 @@ $isSalesOpen = $stmt->fetchColumn() == '1';
                     <tbody>
                         <?php foreach ($orders as $order): ?>
                             <?php
-                                // Calcul du statut global
+                                // Calcul du statut global pour le tableau
                                 $statusBadge = '';
                                 if (!$order['is_paid']) {
                                     $statusBadge = '<span class="badge bg-warning text-dark"><i class="fas fa-clock"></i> En attente paiement</span>';
@@ -168,7 +167,7 @@ $isSalesOpen = $stmt->fetchColumn() == '1';
 
 <script>
 /**
- * Formate une date string en "14/02/2024 à 10:30"
+ * Formate une date string en "14/02/2024 à 10:30" (Format long)
  */
 function formatDateFR(dateString) {
     if (!dateString) return '--';
@@ -184,7 +183,7 @@ function formatDateFR(dateString) {
 }
 
 /**
- * Formate en "14/02 10:30" (Pour la Timeline)
+ * Formate en "14/02 10:30" (Format court pour la Timeline)
  */
 function formatDateTimeShort(dateString) {
     if (!dateString) return '';
@@ -249,10 +248,57 @@ function showOrderDetails(orderId) {
         // --- BOUCLE DESTINATAIRES ---
         data.recipients.forEach(dest => {
             
+            // --- GESTION LOGIQUE TIMELINE ---
+            
+            // 1. COMMANDE
+            const step1Class = "completed";
+            const timeOrdered = formatDateTimeShort(data.order.created_at);
+
+            // 2. PAIEMENT
+            const step2Class = isPaid ? "completed" : "";
+            // Si payé mais pas de date, on met "Validé" par défaut
+            const timePaid = (isPaid && data.order.paid_at) ? formatDateTimeShort(data.order.paid_at) : (isPaid ? "Validé" : "");
+
+            // 3. PRÉPARATION
+            const isPrepared = (dest.is_prepared == 1);
+            let step3Class = "";
+            let timePrepared = "";
+
+            if (isPrepared) {
+                step3Class = "completed";
+                // Si la date existe on la formate, sinon on met "Validé"
+                if (dest.prepared_at) {
+                    timePrepared = formatDateTimeShort(dest.prepared_at);
+                } else {
+                    timePrepared = "Validé";
+                }
+            }
+
+            // 4. DISTRIBUTION
+            const isDistributed = (dest.is_distributed == 1);
+            let step4Class = "";
+            let timeDistributed = "";
+
+            if (isDistributed) {
+                step4Class = "completed";
+                // Si distribué, c'est forcément préparé visuellement
+                step3Class = "completed"; 
+                if (timePrepared === "") timePrepared = "Validé"; // Fallback visuel si étape 3 sautée
+
+                // Si la date existe on la formate, sinon on met "Validé"
+                if (dest.distributed_at) {
+                    timeDistributed = formatDateTimeShort(dest.distributed_at);
+                } else {
+                    timeDistributed = "Validé";
+                }
+            }
+
+            // --- FIN LOGIQUE TIMELINE ---
+
             // Roses Badges
             let rosesHtml = dest.roses.map(r => {
                 let nameLower = r.name.toLowerCase();
-                let badgeClass = "bg-secondary text-white";
+                let badgeClass = "bg-secondary text-white"; 
                 let emoji = "🌹";
                 
                 if (nameLower.includes('rouge')) { badgeClass = "badge-rose-rouge"; emoji = "🌹"; }
@@ -265,20 +311,12 @@ function showOrderDetails(orderId) {
                         </span>`;
             }).join('');
 
-            // Timeline Logic
-            const isPrepared = (dest.is_prepared == 1);
-            const isDistributed = (dest.is_distributed == 1);
+            // Data Adaptation
+            let fullName = `${dest.prenom} ${dest.nom}`;
+            let className = dest.class_name ? dest.class_name : "Classe inconnue";
+            let anonBadge = dest.is_anonymous == 1 ? '<span class="badge bg-dark ms-2"><i class="fas fa-user-secret"></i> Anonyme</span>' : '';
 
-            const step1Class = "completed";
-            const step2Class = isPaid ? "completed" : "";
-            const step3Class = isPrepared || isDistributed ? "completed" : "";
-            const step4Class = isDistributed ? "completed" : "";
-
-            const timeOrdered = formatDateTimeShort(data.order.created_at);
-            const timePaid = isPaid ? "Validé" : "--"; 
-            const timePrepared = (isPrepared && dest.prepared_at) ? formatDateTimeShort(dest.prepared_at) : "";
-            const timeDistributed = (isDistributed && dest.distributed_at) ? formatDateTimeShort(dest.distributed_at) : "";
-
+            // HTML de la timeline
             let timelineHtml = `
                 <div class="stepper-wrapper">
                     <div class="stepper-item ${step1Class}">
@@ -299,12 +337,6 @@ function showOrderDetails(orderId) {
                     </div>
                 </div>
             `;
-
-            // Data Adaptation (New DB Structure)
-            // L'API renvoie maintenant "nom" et "prenom" (pas dest_nom)
-            let fullName = `${dest.prenom} ${dest.nom}`;
-            let className = dest.class_name ? dest.class_name : "Classe inconnue";
-            let anonBadge = dest.is_anonymous == 1 ? '<span class="badge bg-dark ms-2"><i class="fas fa-user-secret"></i> Anonyme</span>' : '';
 
             html += `
                 <div class="card border-0 shadow-sm bg-white rounded-3">
