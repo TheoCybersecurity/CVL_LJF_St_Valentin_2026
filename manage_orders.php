@@ -7,7 +7,7 @@ checkAccess('cvl');
 
 // --- 0. DONNÉES DE RÉFÉRENCE ---
 $allClasses = $pdo->query("SELECT id, name FROM classes ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
-$allRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR); // ID => Nom (ex: 1 => 'B102')
+$allRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
 
 // Produits (Roses)
 $stmtRoses = $pdo->query("SELECT id, name FROM rose_products");
@@ -40,12 +40,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
             $pdo->beginTransaction();
             $calculatedTotalPrice = 0.0;
 
-            // A. Mise à jour Infos Acheteur (Table ORDERS)
-            $buyerClass = !empty($_POST['buyer_class_id']) ? $_POST['buyer_class_id'] : NULL;
-            $stmt = $pdo->prepare("UPDATE orders SET buyer_nom = ?, buyer_prenom = ?, buyer_class_id = ? WHERE id = ?");
-            $stmt->execute([$_POST['buyer_nom'], $_POST['buyer_prenom'], $buyerClass, $orderId]);
+            // =========================================================
+            // A. Mise à jour Infos Acheteur (CORRECTION : Table USERS)
+            // =========================================================
+            // 1. On récupère l'ID de l'utilisateur lié à la commande
+            $stmtGetUserId = $pdo->prepare("SELECT user_id FROM orders WHERE id = ?");
+            $stmtGetUserId->execute([$orderId]);
+            $userId = $stmtGetUserId->fetchColumn();
 
+            if ($userId) {
+                // 2. On met à jour la table users
+                $buyerClass = !empty($_POST['buyer_class_id']) ? $_POST['buyer_class_id'] : NULL;
+                $stmtUserUpdate = $pdo->prepare("UPDATE users SET nom = ?, prenom = ?, class_id = ? WHERE user_id = ?");
+                $stmtUserUpdate->execute([$_POST['buyer_nom'], $_POST['buyer_prenom'], $buyerClass, $userId]);
+            }
+
+            // =========================================================
             // B. Mise à jour des Destinataires
+            // =========================================================
             if (isset($_POST['recipients']) && is_array($_POST['recipients'])) {
                 foreach ($_POST['recipients'] as $orderRecipientId => $rData) {
                     $orderRecipientId = intval($orderRecipientId); // ID du cadeau (order_recipients.id)
@@ -80,7 +92,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
                             $calculatedTotalPrice += floatval($rosesPriceTable[$totalRosesForRecipient]);
                         } else {
                             $maxQtyDefined = max(array_keys($rosesPriceTable));
-                            // Fallback simple : 2€ par rose au delà du max
                             $basePrice = $rosesPriceTable[$maxQtyDefined] ?? ($totalRosesForRecipient * 2); 
                             if($totalRosesForRecipient > $maxQtyDefined) {
                                 $calculatedTotalPrice += ($totalRosesForRecipient * 2.00); 
@@ -91,25 +102,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
                     }
 
                     // 4. Mise à jour Planning (Table SCHEDULES)
-                    // On reçoit un tableau [8 => "Salle A", 9 => "Salle B"...]
                     if (isset($rData['schedule']) && is_array($rData['schedule'])) {
-                        // On prépare la requête dynamique. Ex: UPDATE schedules SET h08 = ?, h09 = ? WHERE recipient_id = ?
                         $schedUpdates = [];
                         $schedValues = [];
                         
                         foreach ($rData['schedule'] as $hour => $roomName) {
-                            // Sécurité : on vérifie que $hour est bien entre 8 et 17
                             if ($hour >= 8 && $hour <= 17) {
-                                $colName = 'h' . str_pad($hour, 2, '0', STR_PAD_LEFT); // h08, h09...
+                                $colName = 'h' . str_pad($hour, 2, '0', STR_PAD_LEFT);
                                 $schedUpdates[] = "$colName = ?";
-                                $schedValues[] = $roomName; // On stocke le NOM de la salle
+                                $schedValues[] = $roomName;
                             }
                         }
 
                         if (!empty($schedUpdates)) {
                             $sqlSched = "UPDATE schedules SET " . implode(', ', $schedUpdates) . " WHERE recipient_id = ?";
-                            $schedValues[] = $studentId; // On ajoute l'ID à la fin
-                            
+                            $schedValues[] = $studentId;
                             $stmtSched = $pdo->prepare($sqlSched);
                             $stmtSched->execute($schedValues);
                         }
@@ -117,16 +124,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
                 }
             }
 
-            // 5. Mise à jour du PRIX TOTAL
+            // 5. Mise à jour du PRIX TOTAL (Table ORDERS)
             $stmtPrice = $pdo->prepare("UPDATE orders SET total_price = ? WHERE id = ?");
             $stmtPrice->execute([$calculatedTotalPrice, $orderId]);
 
             $pdo->commit();
             $msgSuccess = "Commande #$orderId modifiée avec succès.";
-
         }
         
-        // Redirection propre pour éviter le renvoi de formulaire
         header("Location: manage_orders.php?msg_success=" . urlencode($msgSuccess));
         exit;
 
@@ -147,14 +152,22 @@ $percentPaid = ($totalOrders > 0) ? round((($totalOrders - $countUnpaid) / $tota
 // --- 3. RECHERCHE ET AFFICHAGE ---
 $search = isset($_GET['q']) ? trim($_GET['q']) : '';
 
-// Requête adaptée aux tables séparées (orders -> order_recipients -> recipients)
+// Requête adaptée : Jointure avec la table USERS pour l'acheteur
 $sql = "
     SELECT 
         o.id as order_id,
-        o.buyer_nom, o.buyer_prenom, o.created_at, o.total_price,
-        o.is_paid, o.paid_at, o.buyer_class_id,
+        o.created_at, 
+        o.total_price,
+        o.is_paid, 
+        o.paid_at, 
+        
+        -- Infos Acheteur (Via Users)
+        u.nom as buyer_nom, 
+        u.prenom as buyer_prenom,
+        u.class_id as buyer_class_id,
         c_buy.name as buyer_class_name,
         
+        -- Infos Destinataire
         ort.id as order_recipient_id,
         ort.is_anonymous, 
         ort.message_id,
@@ -169,20 +182,22 @@ $sql = "
         c_dest.name as dest_class_name,
         pm.content as message_content
     FROM orders o
-    JOIN order_recipients ort ON o.id = ort.order_id
-    JOIN recipients r ON ort.recipient_id = r.id
-    LEFT JOIN classes c_buy ON o.buyer_class_id = c_buy.id
-    LEFT JOIN classes c_dest ON r.class_id = c_dest.id
+    JOIN users u ON o.user_id = u.user_id                   -- Jointure Acheteur
+    JOIN order_recipients ort ON o.id = ort.order_id        -- Jointure Liaison Cadeau
+    JOIN recipients r ON ort.recipient_id = r.id            -- Jointure Destinataire (Élève)
+    LEFT JOIN classes c_buy ON u.class_id = c_buy.id        -- Classe Acheteur
+    LEFT JOIN classes c_dest ON r.class_id = c_dest.id      -- Classe Destinataire
     LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
 ";
 
 $params = [];
 if (!empty($search)) {
+    // Filtres mis à jour : on cherche sur 'u.' (users) au lieu de 'o.'
     $sql .= " WHERE 
         o.id LIKE :s OR 
-        o.buyer_nom LIKE :s OR 
-        o.buyer_prenom LIKE :s OR 
-        CONCAT(o.buyer_prenom, ' ', o.buyer_nom) LIKE :s OR 
+        u.nom LIKE :s OR 
+        u.prenom LIKE :s OR 
+        CONCAT(u.prenom, ' ', u.nom) LIKE :s OR 
         c_buy.name LIKE :s OR 
         
         r.nom LIKE :s OR 
@@ -223,22 +238,20 @@ foreach ($raw_results as $row) {
         ];
     }
 
-    // Récupérer les roses liées à ce destinataire (Liaison via order_recipient_id)
+    // Récupérer les roses liées
     $stmtRoses = $pdo->prepare("SELECT rr.id as rose_link_id, rr.quantity, rr.rose_product_id, rp.name FROM recipient_roses rr JOIN rose_products rp ON rr.rose_product_id = rp.id WHERE rr.recipient_id = ?");
     $stmtRoses->execute([$row['order_recipient_id']]);
     $roses = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
 
-    // Récupérer l'emploi du temps (Liaison via student_id)
-    // On récupère directement la ligne complète
+    // Récupérer l'emploi du temps
     $stmtSchedule = $pdo->prepare("SELECT h08, h09, h10, h11, h12, h13, h14, h15, h16, h17 FROM schedules WHERE recipient_id = ?");
     $stmtSchedule->execute([$row['student_id']]);
     $schedRow = $stmtSchedule->fetch(PDO::FETCH_ASSOC);
 
-    // Transformation de la ligne (h08 => "Salle") en tableau simple [8 => "Salle", 9 => ""]
     $scheduleMap = [];
     if ($schedRow) {
         foreach ($schedRow as $col => $roomName) {
-            $hour = intval(substr($col, 1)); // h08 -> 8
+            $hour = intval(substr($col, 1)); 
             $scheduleMap[$hour] = $roomName;
         }
     }
@@ -613,9 +626,7 @@ foreach ($raw_results as $row) {
                                                                 <label class="small fw-bold">📅 Emploi du temps complet (8h - 17h)</label>
                                                                 <div class="row g-1">
                                                                     <?php 
-                                                                    // BOUCLE DE 8H A 17H POUR AFFICHER TOUS LES CRENEAUX
                                                                     for ($h = 8; $h <= 17; $h++): 
-                                                                        // On récupère le Nom de la salle stocké (texte)
                                                                         $currentRoomName = $dest['schedule_map'][$h] ?? '';
                                                                     ?>
                                                                         <div class="col-md-2 col-4 mb-2">
