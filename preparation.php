@@ -347,7 +347,7 @@ foreach ($rawResults as $row) {
                         <div class="card-body">
                             <div class="d-flex justify-content-between align-items-center mb-3">
                                 <div>
-                                    <h5 class="card-title fw-bold mb-0 text-uppercase">
+                                    <h5 class="card-title fw-bold mb-0">
                                         <?php echo htmlspecialchars($student['name']); ?>
                                     </h5>
                                     <?php if($view === 'done'): ?>
