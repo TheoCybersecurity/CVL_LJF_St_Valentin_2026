@@ -3,6 +3,22 @@
 session_start();
 require_once 'db.php';
 require_once 'auth_check.php';
+
+// RECUPERATION DES MEMBRES DU CVL
+$cvlTeam = [];
+try {
+    // On sélectionne le prénom et le nom
+    // On exclut spécifiquement l'ID 2 (le développeur) de cette liste
+    $sqlTeam = "SELECT u.prenom, u.nom 
+                FROM cvl_members cm 
+                JOIN users u ON cm.user_id = u.user_id 
+                WHERE cm.user_id != 2 
+                ORDER BY u.nom ASC"; 
+    $stmtTeam = $pdo->query($sqlTeam);
+    $cvlTeam = $stmtTeam->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $cvlTeam = [];
+}
 ?>
 
 <!DOCTYPE html>
@@ -22,12 +38,14 @@ require_once 'auth_check.php';
             background: linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%);
             border: none;
         }
+        .cvl-section {
+            border-top: 5px solid #dc3545; /* Rouge St Valentin */
+        }
         .tech-badge {
             font-size: 0.9rem;
             margin-bottom: 8px;
             padding: 8px 12px;
         }
-        /* Style spécifique pour la boîte GitHub demandée */
         .github-box {
             background-color: #24292e;
             color: white;
@@ -45,7 +63,22 @@ require_once 'auth_check.php';
         }
         .btn-instagram:hover {
             opacity: 0.9;
-            color: white; /* Garde le texte blanc au survol */
+            color: white;
+        }
+        .member-badge {
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            transition: all 0.2s;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        .member-badge:hover {
+            border-color: #dc3545;
+            transform: translateY(-2px);
+            box-shadow: 0 .125rem .25rem rgba(0,0,0,.075);
         }
     </style>
 </head>
@@ -60,7 +93,7 @@ require_once 'auth_check.php';
         <p class="text-muted lead">Une initiative numérique au service du lycée Jules Fil, alliant passion et compétences techniques.</p>
     </div>
 
-    <div class="row g-4">
+    <div class="row g-4 mb-4">
         
         <div class="col-lg-7">
             <div class="card shadow-sm border-0 h-100 p-4 profile-section">
@@ -154,6 +187,37 @@ require_once 'auth_check.php';
                     </div>
                 </div>
 
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm border-0 cvl-section p-4 bg-white">
+                <h4 class="fw-bold mb-3 text-danger"><i class="fas fa-heart me-2"></i>L'Équipe Organisatrice (CVL)</h4>
+                <p class="text-muted mb-4">
+                    Un grand merci aux membres du Conseil de la Vie Lycéenne qui ont imaginé, organisé et animé cet événement pour le lycée. Sans leur énergie, ce projet technique n'aurait pas d'utilité.
+                </p>
+
+                <div class="row g-3">
+                    <?php if (count($cvlTeam) > 0): ?>
+                        <?php foreach ($cvlTeam as $member): ?>
+                            <div class="col-6 col-md-4 col-lg-3">
+                                <div class="p-3 rounded text-center member-badge">
+                                    <i class="fas fa-user-graduate text-secondary mb-2 fa-lg d-block"></i>
+                                    <span class="fw-bold text-dark text-capitalize">
+                                        <?php echo htmlspecialchars($member['prenom'] . ' ' . $member['nom']); ?>
+                                    </span>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <div class="col-12 text-center text-muted">
+                            <p>La liste des membres est en cours de mise à jour.</p>
+                        </div>
+                    <?php endif; ?>
+                </div>
+                
             </div>
         </div>
     </div>
