@@ -57,7 +57,7 @@ if (isset($_GET['delete_id'])) {
 $stmt = $pdo->query("
     SELECT cm.user_id, cm.role, u.nom, u.prenom 
     FROM cvl_members cm 
-    LEFT JOIN project_users u ON cm.user_id = u.user_id 
+    LEFT JOIN users u ON cm.user_id = u.user_id 
     ORDER BY FIELD(cm.role, 'admin', 'cvl'), u.nom ASC
 ");
 $teamMembers = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -65,7 +65,7 @@ $teamMembers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // B. Liste pour le menu déroulant (ceux qui ne sont PAS encore membres)
 $stmt = $pdo->query("
     SELECT u.user_id, u.nom, u.prenom 
-    FROM project_users u 
+    FROM users u 
     LEFT JOIN cvl_members cm ON u.user_id = cm.user_id 
     WHERE cm.user_id IS NULL 
     ORDER BY u.nom ASC
