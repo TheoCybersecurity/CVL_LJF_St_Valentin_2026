@@ -7,142 +7,147 @@ checkAccess('cvl');
 
 // --- 0. DONNÉES DE RÉFÉRENCE ---
 $allClasses = $pdo->query("SELECT id, name FROM classes ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
-$allRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
+$allRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR); // ID => Nom (ex: 1 => 'B102')
 
-// MODIF : On ne récupère plus le prix dans rose_products, juste id et name
+// Produits (Roses)
 $stmtRoses = $pdo->query("SELECT id, name FROM rose_products");
 $allRoseTypes = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
 
-// MODIF : On charge la grille tarifaire (Quantité => Prix)
+// Grille tarifaire
 $stmtPrices = $pdo->query("SELECT quantity, price FROM roses_prices");
-$rosesPriceTable = $stmtPrices->fetchAll(PDO::FETCH_KEY_PAIR); // [1 => 2.00, 3 => 5.00, ...]
+$rosesPriceTable = $stmtPrices->fetchAll(PDO::FETCH_KEY_PAIR); 
 
 $allMessages = $pdo->query("SELECT id, content FROM predefined_messages ORDER BY position ASC, id ASC")->fetchAll(PDO::FETCH_KEY_PAIR);
 
-// --- 1. TRAITEMENT DES ACTIONS ---
+// --- 1. TRAITEMENT DES ACTIONS (POST) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['order_id'])) {
     $orderId = intval($_POST['order_id']);
-    
     $msgSuccess = "Action effectuée avec succès.";
 
-    if ($_POST['action'] === 'validate_payment') {
-        $adminId = $_SESSION['user_id'] ?? null; 
-        $stmt = $pdo->prepare("UPDATE orders SET is_paid = 1, paid_at = NOW(), paid_by_cvl_id = ? WHERE id = ?");
-        $stmt->execute([$adminId, $orderId]);
-        $msgSuccess = "Paiement validé pour la commande #$orderId !";
-    } 
-    elseif ($_POST['action'] === 'cancel_payment') {
-        $stmt = $pdo->prepare("UPDATE orders SET is_paid = 0, paid_at = NULL, paid_by_cvl_id = NULL WHERE id = ?");
-        $stmt->execute([$orderId]);
-        $msgSuccess = "Paiement annulé pour la commande #$orderId.";
-    }
-    elseif ($_POST['action'] === 'edit_order') {
-        try {
+    try {
+        if ($_POST['action'] === 'validate_payment') {
+            $adminId = $_SESSION['user_id'] ?? null; 
+            $stmt = $pdo->prepare("UPDATE orders SET is_paid = 1, paid_at = NOW(), paid_by_cvl_id = ? WHERE id = ?");
+            $stmt->execute([$adminId, $orderId]);
+            $msgSuccess = "Paiement validé pour la commande #$orderId !";
+        } 
+        elseif ($_POST['action'] === 'cancel_payment') {
+            $stmt = $pdo->prepare("UPDATE orders SET is_paid = 0, paid_at = NULL, paid_by_cvl_id = NULL WHERE id = ?");
+            $stmt->execute([$orderId]);
+            $msgSuccess = "Paiement annulé pour la commande #$orderId.";
+        }
+        elseif ($_POST['action'] === 'edit_order') {
             $pdo->beginTransaction();
             $calculatedTotalPrice = 0.0;
 
-            // 1. Mise à jour Infos Acheteur
+            // A. Mise à jour Infos Acheteur (Table ORDERS)
             $buyerClass = !empty($_POST['buyer_class_id']) ? $_POST['buyer_class_id'] : NULL;
             $stmt = $pdo->prepare("UPDATE orders SET buyer_nom = ?, buyer_prenom = ?, buyer_class_id = ? WHERE id = ?");
             $stmt->execute([$_POST['buyer_nom'], $_POST['buyer_prenom'], $buyerClass, $orderId]);
 
-            // 2. Mise à jour des Destinataires
+            // B. Mise à jour des Destinataires
             if (isset($_POST['recipients']) && is_array($_POST['recipients'])) {
-                foreach ($_POST['recipients'] as $rId => $rData) {
-                    $rId = intval($rId);
-                    $destClass = !empty($rData['class_id']) ? $rData['class_id'] : NULL;
-                    $isAnon = isset($rData['is_anonymous']) ? 1 : 0;
+                foreach ($_POST['recipients'] as $orderRecipientId => $rData) {
+                    $orderRecipientId = intval($orderRecipientId); // ID du cadeau (order_recipients.id)
+                    $studentId = intval($rData['student_id']);     // ID de l'élève (recipients.id)
                     
-                    $stmtR = $pdo->prepare("UPDATE order_recipients SET dest_nom = ?, dest_prenom = ?, class_id = ?, is_anonymous = ?, message_id = ? WHERE id = ? AND order_id = ?");
-                    $stmtR->execute([$rData['nom'], $rData['prenom'], $destClass, $isAnon, $rData['message_id'], $rId, $orderId]);
+                    // 1. Mise à jour infos Élève (Table RECIPIENTS)
+                    $destClass = !empty($rData['class_id']) ? $rData['class_id'] : NULL;
+                    $stmtStudent = $pdo->prepare("UPDATE recipients SET nom = ?, prenom = ?, class_id = ? WHERE id = ?");
+                    $stmtStudent->execute([$rData['nom'], $rData['prenom'], $destClass, $studentId]);
 
-                    // 3. Mise à jour Quantités Roses & Calcul du prix par destinataire
-                    $totalRosesForRecipient = 0; // Compteur de roses pour CE destinataire
+                    // 2. Mise à jour infos Cadeau (Table ORDER_RECIPIENTS)
+                    $isAnon = isset($rData['is_anonymous']) ? 1 : 0;
+                    $stmtGift = $pdo->prepare("UPDATE order_recipients SET is_anonymous = ?, message_id = ? WHERE id = ?");
+                    $stmtGift->execute([$isAnon, $rData['message_id'], $orderRecipientId]);
 
+                    // 3. Mise à jour Quantités Roses & Calcul Prix
+                    $totalRosesForRecipient = 0;
                     if (isset($rData['roses']) && is_array($rData['roses'])) {
                         foreach ($rData['roses'] as $roseLinkId => $qty) {
                             $qty = intval($qty);
                             if ($qty < 0) $qty = 0;
-
+                            
                             $stmtRose = $pdo->prepare("UPDATE recipient_roses SET quantity = ? WHERE id = ?");
                             $stmtRose->execute([$qty, $roseLinkId]);
-
-                            // On ajoute au total de roses du destinataire
                             $totalRosesForRecipient += $qty;
                         }
                     }
 
-                    // --- NOUVEAU CALCUL DU PRIX ---
-                    // On regarde dans la grille tarifaire le prix pour ce nombre de roses
+                    // Calcul prix (Logique conservée)
                     if ($totalRosesForRecipient > 0) {
                         if (isset($rosesPriceTable[$totalRosesForRecipient])) {
-                            // Prix défini dans la table (ex: 3 roses = 5€)
                             $calculatedTotalPrice += floatval($rosesPriceTable[$totalRosesForRecipient]);
                         } else {
-                            // Si la quantité dépasse la grille (ex: 50 roses), on fait un calcul par défaut
-                            // Par exemple : Prix max défini + 2€ par rose supplémentaire
-                            // Ou simple fallback : quantité * 2€
                             $maxQtyDefined = max(array_keys($rosesPriceTable));
-                            if ($totalRosesForRecipient > $maxQtyDefined) {
-                                // Fallback simple : prix unitaire de base (2€)
-                                $calculatedTotalPrice += ($totalRosesForRecipient * 2.00);
+                            // Fallback simple : 2€ par rose au delà du max
+                            $basePrice = $rosesPriceTable[$maxQtyDefined] ?? ($totalRosesForRecipient * 2); 
+                            if($totalRosesForRecipient > $maxQtyDefined) {
+                                $calculatedTotalPrice += ($totalRosesForRecipient * 2.00); 
+                            } else {
+                                $calculatedTotalPrice += $basePrice;
                             }
                         }
                     }
 
-                    // 4. Mise à jour Planning (inchangé)
+                    // 4. Mise à jour Planning (Table SCHEDULES)
+                    // On reçoit un tableau [8 => "Salle A", 9 => "Salle B"...]
                     if (isset($rData['schedule']) && is_array($rData['schedule'])) {
-                        foreach ($rData['schedule'] as $hour => $roomId) {
-                            $existingId = $rData['schedule_ids'][$hour] ?? null;
-
-                            if (!empty($existingId)) {
-                                if (!empty($roomId)) {
-                                    $stmtUpd = $pdo->prepare("UPDATE recipient_schedules SET room_id = ? WHERE id = ?");
-                                    $stmtUpd->execute([$roomId, $existingId]);
-                                } else {
-                                    $stmtDel = $pdo->prepare("DELETE FROM recipient_schedules WHERE id = ?");
-                                    $stmtDel->execute([$existingId]);
-                                }
-                            } else {
-                                if (!empty($roomId)) {
-                                    $stmtIns = $pdo->prepare("INSERT INTO recipient_schedules (recipient_id, room_id, hour_slot) VALUES (?, ?, ?)");
-                                    $stmtIns->execute([$rId, $roomId, $hour]);
-                                }
+                        // On prépare la requête dynamique. Ex: UPDATE schedules SET h08 = ?, h09 = ? WHERE recipient_id = ?
+                        $schedUpdates = [];
+                        $schedValues = [];
+                        
+                        foreach ($rData['schedule'] as $hour => $roomName) {
+                            // Sécurité : on vérifie que $hour est bien entre 8 et 17
+                            if ($hour >= 8 && $hour <= 17) {
+                                $colName = 'h' . str_pad($hour, 2, '0', STR_PAD_LEFT); // h08, h09...
+                                $schedUpdates[] = "$colName = ?";
+                                $schedValues[] = $roomName; // On stocke le NOM de la salle
                             }
+                        }
+
+                        if (!empty($schedUpdates)) {
+                            $sqlSched = "UPDATE schedules SET " . implode(', ', $schedUpdates) . " WHERE recipient_id = ?";
+                            $schedValues[] = $studentId; // On ajoute l'ID à la fin
+                            
+                            $stmtSched = $pdo->prepare($sqlSched);
+                            $stmtSched->execute($schedValues);
                         }
                     }
                 }
             }
 
-            // 5. Mise à jour du PRIX TOTAL COMMANDE
+            // 5. Mise à jour du PRIX TOTAL
             $stmtPrice = $pdo->prepare("UPDATE orders SET total_price = ? WHERE id = ?");
             $stmtPrice->execute([$calculatedTotalPrice, $orderId]);
 
             $pdo->commit();
-            $msgSuccess = "Modifications enregistrées avec succès !";
+            $msgSuccess = "Commande #$orderId modifiée avec succès.";
 
-        } catch (Exception $e) {
-            $pdo->rollBack();
-            header("Location: manage_orders.php?msg_error=" . urlencode("Erreur : " . $e->getMessage()));
-            exit;
         }
-    }
+        
+        // Redirection propre pour éviter le renvoi de formulaire
+        header("Location: manage_orders.php?msg_success=" . urlencode($msgSuccess));
+        exit;
 
-    header("Location: manage_orders.php?msg_success=" . urlencode($msgSuccess));
-    exit;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        header("Location: manage_orders.php?msg_error=" . urlencode("Erreur : " . $e->getMessage()));
+        exit;
+    }
 }
 
-// --- 2. STATS ---
+// --- 2. STATS (Inchangées) ---
 $totalRevenue = $pdo->query("SELECT SUM(total_price) FROM orders WHERE is_paid = 1")->fetchColumn() ?: 0;
 $totalRoses = $pdo->query("SELECT SUM(quantity) FROM recipient_roses")->fetchColumn() ?: 0;
 $totalOrders = $pdo->query("SELECT COUNT(*) FROM orders")->fetchColumn() ?: 0;
-$stmtUnpaid = $pdo->query("SELECT COUNT(*) FROM orders WHERE is_paid = 0");
-$countUnpaid = $stmtUnpaid->fetchColumn();
+$countUnpaid = $pdo->query("SELECT COUNT(*) FROM orders WHERE is_paid = 0")->fetchColumn();
 $percentPaid = ($totalOrders > 0) ? round((($totalOrders - $countUnpaid) / $totalOrders) * 100) : 0;
 
-// --- 3. REQUÊTE PRINCIPALE (AVEC MOTEUR DE RECHERCHE) ---
+// --- 3. RECHERCHE ET AFFICHAGE ---
 $search = isset($_GET['q']) ? trim($_GET['q']) : '';
 
+// Requête adaptée aux tables séparées (orders -> order_recipients -> recipients)
 $sql = "
     SELECT 
         o.id as order_id,
@@ -150,22 +155,29 @@ $sql = "
         o.is_paid, o.paid_at, o.buyer_class_id,
         c_buy.name as buyer_class_name,
         
-        r.id as recipient_id,
-        r.dest_nom, r.dest_prenom, r.is_anonymous, r.message_id,
-        r.is_distributed, r.distributed_at, r.class_id as dest_class_id,
+        ort.id as order_recipient_id,
+        ort.is_anonymous, 
+        ort.message_id,
+        ort.is_distributed, 
+        ort.distributed_at,
+        
+        r.id as student_id,
+        r.nom as dest_nom, 
+        r.prenom as dest_prenom,
+        r.class_id as dest_class_id,
+        
         c_dest.name as dest_class_name,
         pm.content as message_content
     FROM orders o
-    JOIN order_recipients r ON o.id = r.order_id
+    JOIN order_recipients ort ON o.id = ort.order_id
+    JOIN recipients r ON ort.recipient_id = r.id
     LEFT JOIN classes c_buy ON o.buyer_class_id = c_buy.id
     LEFT JOIN classes c_dest ON r.class_id = c_dest.id
-    LEFT JOIN predefined_messages pm ON r.message_id = pm.id
+    LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
 ";
 
-// Construction dynamique de la clause WHERE
 $params = [];
 if (!empty($search)) {
-    // On cherche dans : ID commande, Nom/Prénom acheteur, Nom/Prénom destinataire, Classes
     $sql .= " WHERE 
         o.id LIKE :s OR 
         o.buyer_nom LIKE :s OR 
@@ -173,9 +185,9 @@ if (!empty($search)) {
         CONCAT(o.buyer_prenom, ' ', o.buyer_nom) LIKE :s OR 
         c_buy.name LIKE :s OR 
         
-        r.dest_nom LIKE :s OR 
-        r.dest_prenom LIKE :s OR 
-        CONCAT(r.dest_prenom, ' ', r.dest_nom) LIKE :s OR 
+        r.nom LIKE :s OR 
+        r.prenom LIKE :s OR 
+        CONCAT(r.prenom, ' ', r.nom) LIKE :s OR 
         c_dest.name LIKE :s
     ";
     $params[':s'] = '%' . $search . '%';
@@ -189,7 +201,7 @@ try {
     $raw_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) { die("Erreur SQL : " . $e->getMessage()); }
 
-// --- 4. REGROUPEMENT ---
+// --- 4. REGROUPEMENT DES DONNÉES ---
 $groupedOrders = [];
 foreach ($raw_results as $row) {
     $orderId = $row['order_id'];
@@ -211,27 +223,29 @@ foreach ($raw_results as $row) {
         ];
     }
 
-    // Roses
+    // Récupérer les roses liées à ce destinataire (Liaison via order_recipient_id)
     $stmtRoses = $pdo->prepare("SELECT rr.id as rose_link_id, rr.quantity, rr.rose_product_id, rp.name FROM recipient_roses rr JOIN rose_products rp ON rr.rose_product_id = rp.id WHERE rr.recipient_id = ?");
-    $stmtRoses->execute([$row['recipient_id']]);
+    $stmtRoses->execute([$row['order_recipient_id']]);
     $roses = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
 
-    // Schedule
-    $stmtSchedule = $pdo->prepare("SELECT rs.id as schedule_id, rs.hour_slot, rs.room_id, rm.name as room_name FROM recipient_schedules rs JOIN rooms rm ON rs.room_id = rm.id WHERE rs.recipient_id = ?");
-    $stmtSchedule->execute([$row['recipient_id']]);
-    $rawSchedule = $stmtSchedule->fetchAll(PDO::FETCH_ASSOC);
-    
+    // Récupérer l'emploi du temps (Liaison via student_id)
+    // On récupère directement la ligne complète
+    $stmtSchedule = $pdo->prepare("SELECT h08, h09, h10, h11, h12, h13, h14, h15, h16, h17 FROM schedules WHERE recipient_id = ?");
+    $stmtSchedule->execute([$row['student_id']]);
+    $schedRow = $stmtSchedule->fetch(PDO::FETCH_ASSOC);
+
+    // Transformation de la ligne (h08 => "Salle") en tableau simple [8 => "Salle", 9 => ""]
     $scheduleMap = [];
-    foreach($rawSchedule as $sch) {
-        $scheduleMap[$sch['hour_slot']] = [
-            'db_id' => $sch['schedule_id'],
-            'room_id' => $sch['room_id'],
-            'room_name' => $sch['room_name']
-        ];
+    if ($schedRow) {
+        foreach ($schedRow as $col => $roomName) {
+            $hour = intval(substr($col, 1)); // h08 -> 8
+            $scheduleMap[$hour] = $roomName;
+        }
     }
 
     $groupedOrders[$orderId]['recipients'][] = [
-        'id' => $row['recipient_id'],
+        'order_recipient_id' => $row['order_recipient_id'],
+        'student_id' => $row['student_id'],
         'nom' => $row['dest_nom'],
         'prenom' => $row['dest_prenom'],
         'class_id' => $row['dest_class_id'],
@@ -265,6 +279,8 @@ foreach ($raw_results as $row) {
         .table-admin th { font-size: 0.85rem; text-transform: uppercase; background-color: #f8f9fa; }
         .recipient-row { border-bottom: 1px dashed #dee2e6; padding: 10px 0; }
         .recipient-row:last-child { border-bottom: none; }
+        .pulse-button { animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); } 70% { transform: scale(1.02); box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); } 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); } }
     </style>
 </head>
 <body class="bg-light">
@@ -291,7 +307,6 @@ foreach ($raw_results as $row) {
     </div>
 
     <div class="row mb-4 g-3">
-    
         <div class="col-md-4">
             <div class="card border-0 shadow-sm h-100" style="background: linear-gradient(135deg, #198754 0%, #20c997 100%); color: white;">
                 <div class="card-body p-3 d-flex justify-content-between align-items-center">
@@ -299,8 +314,7 @@ foreach ($raw_results as $row) {
                         <h6 class="text-white-50 text-uppercase mb-1" style="font-size: 0.8rem; letter-spacing: 1px;">Cagnotte Totale</h6>
                         <h2 class="fw-bold mb-0"><?php echo number_format($totalRevenue, 2); ?> €</h2>
                     </div>
-                    <div class="rounded-circle bg-white bg-opacity-25 d-flex align-items-center justify-content-center flex-shrink-0" 
-                        style="width: 60px; height: 60px;">
+                    <div class="rounded-circle bg-white bg-opacity-25 d-flex align-items-center justify-content-center flex-shrink-0" style="width: 60px; height: 60px;">
                         <i class="fas fa-euro-sign fa-2x"></i>
                     </div>
                 </div>
@@ -335,8 +349,7 @@ foreach ($raw_results as $row) {
                         <h6 class="text-white-50 text-uppercase mb-1" style="font-size: 0.8rem; letter-spacing: 1px;">Volume Roses</h6>
                         <h2 class="fw-bold mb-0"><?php echo $totalRoses; ?> 🌹</h2>
                     </div>
-                    <div class="rounded-circle bg-white bg-opacity-25 d-flex align-items-center justify-content-center flex-shrink-0" 
-                        style="width: 60px; height: 60px;">
+                    <div class="rounded-circle bg-white bg-opacity-25 d-flex align-items-center justify-content-center flex-shrink-0" style="width: 60px; height: 60px;">
                         <i class="fas fa-box-open fa-2x"></i>
                     </div>
                 </div>
@@ -348,7 +361,6 @@ foreach ($raw_results as $row) {
         <a href="preparation.php" class="btn btn-lg btn-primary fw-bold shadow-sm flex-grow-1">
             <i class="fas fa-boxes"></i> Mode Préparation
         </a>
-
         <a href="delivery.php" class="btn btn-lg btn-success fw-bold shadow-sm flex-grow-1">
             <i class="fas fa-truck"></i> Mode Distribution
         </a>
@@ -356,10 +368,8 @@ foreach ($raw_results as $row) {
 
     <div class="card shadow border-0 rounded-3">
         <div class="card-header bg-white py-3 d-flex flex-wrap justify-content-center justify-content-md-between align-items-center gap-3">
-            
             <div class="d-flex align-items-center gap-3">
                 <h5 class="mb-0 fw-bold text-primary">📦 Commandes & Livraisons</h5>
-                
                 <?php if(!empty($search)): ?>
                     <span class="badge bg-warning text-dark animate__animated animate__fadeIn shadow-sm">
                         <?php echo count($groupedOrders); ?> résultat(s)
@@ -369,31 +379,16 @@ foreach ($raw_results as $row) {
 
             <form method="GET" action="manage_orders.php" class="d-flex mt-2 mt-md-0 mx-auto mx-md-0 ms-md-auto" style="max-width: 350px; width: 100%;">
                 <div class="input-group">
-                    
-                    <input type="text" 
-                           name="q" 
-                           class="form-control rounded-start-pill border-end-0 ps-3 bg-light" 
-                           placeholder="Rechercher..." 
-                           value="<?php echo htmlspecialchars($search); ?>">
-                    
+                    <input type="text" name="q" class="form-control rounded-start-pill border-end-0 ps-3 bg-light" placeholder="Rechercher..." value="<?php echo htmlspecialchars($search); ?>">
                     <?php if(!empty($search)): ?>
-                        <a href="manage_orders.php" 
-                           class="btn btn-light border border-start-0 border-end-0 text-danger" 
-                           title="Effacer">
-                            <i class="fas fa-times"></i>
-                        </a>
+                        <a href="manage_orders.php" class="btn btn-light border border-start-0 border-end-0 text-danger" title="Effacer"><i class="fas fa-times"></i></a>
                     <?php endif; ?>
-
-                    <button class="btn btn-primary rounded-end-pill px-3" type="submit">
-                        <i class="fas fa-search"></i>
-                    </button>
-
+                    <button class="btn btn-primary rounded-end-pill px-3" type="submit"><i class="fas fa-search"></i></button>
                 </div>
             </form>
         </div>
 
         <div class="card-body p-0">
-            
             <?php if (!empty($search) && empty($groupedOrders)): ?>
                 <div class="alert alert-warning m-3 border-0 shadow-sm">
                     <i class="fas fa-search mb-0 me-2"></i> Aucune commande ne correspond à votre recherche "<strong><?php echo htmlspecialchars($search); ?></strong>".
@@ -417,7 +412,7 @@ foreach ($raw_results as $row) {
                             <tr>
                                 <td class="bg-white <?php echo $order['info']['is_paid'] ? '' : 'table-warning'; ?>">
                                     <div class="d-flex justify-content-between align-items-start mb-2">
-                                        <span class="badge bg-secondary">#<?php echo $order['info']['id']; ?></span>
+                                        <span class="badge bg-secondary">#<?php echo str_pad($order['info']['id'], 4, '0', STR_PAD_LEFT); ?></span>
                                         <button class="btn btn-sm btn-outline-dark" data-bs-toggle="modal" data-bs-target="#editModal<?php echo $order['info']['id']; ?>">
                                             <i class="fas fa-pencil-alt"></i> Éditer
                                         </button>
@@ -501,12 +496,11 @@ foreach ($raw_results as $row) {
                                                 <strong class="small text-uppercase text-muted">📍 Localisation</strong>
                                                 <div class="mt-1">
                                                     <?php 
-                                                        // Affichage simple pour le tableau (seulement les slots remplis)
                                                         $hasSchedule = false;
                                                         ksort($dest['schedule_map']);
-                                                        foreach($dest['schedule_map'] as $hour => $slot) {
-                                                            if(!empty($slot['room_name'])) {
-                                                                echo "<div class='small mb-1'><span class='fw-bold'>{$hour}h</span> : ".htmlspecialchars($slot['room_name'])."</div>";
+                                                        foreach($dest['schedule_map'] as $hour => $roomName) {
+                                                            if(!empty($roomName)) {
+                                                                echo "<div class='small mb-1'><span class='fw-bold'>{$hour}h</span> : ".htmlspecialchars($roomName)."</div>";
                                                                 $hasSchedule = true;
                                                             }
                                                         }
@@ -521,7 +515,8 @@ foreach ($raw_results as $row) {
                             </tr>
 
                             <div class="modal fade" id="editModal<?php echo $order['info']['id']; ?>" tabindex="-1" aria-hidden="true">
-                                <div class="modal-dialog modal-xl"> <div class="modal-content">
+                                <div class="modal-dialog modal-xl"> 
+                                    <div class="modal-content">
                                         <div class="modal-header bg-dark text-white">
                                             <h5 class="modal-title"><i class="fas fa-edit"></i> Éditer la commande #<?php echo $order['info']['id']; ?></h5>
                                             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -559,18 +554,20 @@ foreach ($raw_results as $row) {
                                                         <div class="card-body">
                                                             <h6 class="text-danger fw-bold border-bottom pb-2">❤️ Destinataire <?php echo $index + 1; ?></h6>
                                                             
+                                                            <input type="hidden" name="recipients[<?php echo $dest['order_recipient_id']; ?>][student_id]" value="<?php echo $dest['student_id']; ?>">
+
                                                             <div class="row g-2 mb-3">
                                                                 <div class="col-md-3">
                                                                     <label class="small">Prénom</label>
-                                                                    <input type="text" name="recipients[<?php echo $dest['id']; ?>][prenom]" class="form-control form-control-sm" value="<?php echo htmlspecialchars($dest['prenom']); ?>">
+                                                                    <input type="text" name="recipients[<?php echo $dest['order_recipient_id']; ?>][prenom]" class="form-control form-control-sm" value="<?php echo htmlspecialchars($dest['prenom']); ?>">
                                                                 </div>
                                                                 <div class="col-md-3">
                                                                     <label class="small">Nom</label>
-                                                                    <input type="text" name="recipients[<?php echo $dest['id']; ?>][nom]" class="form-control form-control-sm" value="<?php echo htmlspecialchars($dest['nom']); ?>">
+                                                                    <input type="text" name="recipients[<?php echo $dest['order_recipient_id']; ?>][nom]" class="form-control form-control-sm" value="<?php echo htmlspecialchars($dest['nom']); ?>">
                                                                 </div>
                                                                 <div class="col-md-3">
                                                                     <label class="small">Classe</label>
-                                                                    <select name="recipients[<?php echo $dest['id']; ?>][class_id]" class="form-select form-select-sm">
+                                                                    <select name="recipients[<?php echo $dest['order_recipient_id']; ?>][class_id]" class="form-select form-select-sm">
                                                                         <option value="">-- Inconnue --</option>
                                                                         <?php foreach($allClasses as $id => $name): ?>
                                                                             <option value="<?php echo $id; ?>" <?php if($dest['class_id'] == $id) echo 'selected'; ?>><?php echo htmlspecialchars($name); ?></option>
@@ -580,11 +577,11 @@ foreach ($raw_results as $row) {
                                                                 <div class="col-md-3 d-flex align-items-center">
                                                                     <div class="form-check form-switch pt-4">
                                                                         <input class="form-check-input" type="checkbox" role="switch" 
-                                                                            name="recipients[<?php echo $dest['id']; ?>][is_anonymous]" 
+                                                                            name="recipients[<?php echo $dest['order_recipient_id']; ?>][is_anonymous]" 
                                                                             value="1" 
-                                                                            id="anonSwitch_<?php echo $dest['id']; ?>"
+                                                                            id="anonSwitch_<?php echo $dest['order_recipient_id']; ?>"
                                                                             <?php if($dest['is_anonymous']) echo 'checked'; ?>>
-                                                                        <label class="form-check-label small" for="anonSwitch_<?php echo $dest['id']; ?>">Anonyme</label>
+                                                                        <label class="form-check-label small" for="anonSwitch_<?php echo $dest['order_recipient_id']; ?>">Anonyme</label>
                                                                     </div>
                                                                 </div>
                                                             </div>
@@ -595,7 +592,7 @@ foreach ($raw_results as $row) {
                                                                     <?php foreach($dest['roses'] as $rose): ?>
                                                                         <div class="col-4">
                                                                             <label class="small text-muted"><?php echo htmlspecialchars($rose['name']); ?></label>
-                                                                            <input type="number" min="0" name="recipients[<?php echo $dest['id']; ?>][roses][<?php echo $rose['rose_link_id']; ?>]" class="form-control form-control-sm" value="<?php echo $rose['quantity']; ?>">
+                                                                            <input type="number" min="0" name="recipients[<?php echo $dest['order_recipient_id']; ?>][roses][<?php echo $rose['rose_link_id']; ?>]" class="form-control form-control-sm" value="<?php echo $rose['quantity']; ?>">
                                                                         </div>
                                                                     <?php endforeach; ?>
                                                                 </div>
@@ -603,7 +600,7 @@ foreach ($raw_results as $row) {
 
                                                             <div class="mb-3">
                                                                 <label class="small fw-bold">Message</label>
-                                                                <select name="recipients[<?php echo $dest['id']; ?>][message_id]" class="form-select form-select-sm">
+                                                                <select name="recipients[<?php echo $dest['order_recipient_id']; ?>][message_id]" class="form-select form-select-sm">
                                                                     <?php foreach($allMessages as $msgId => $msgContent): ?>
                                                                         <option value="<?php echo $msgId; ?>" <?php if($dest['message_id'] == $msgId) echo 'selected'; ?>>
                                                                             <?php echo htmlspecialchars($msgContent); ?>
@@ -618,18 +615,18 @@ foreach ($raw_results as $row) {
                                                                     <?php 
                                                                     // BOUCLE DE 8H A 17H POUR AFFICHER TOUS LES CRENEAUX
                                                                     for ($h = 8; $h <= 17; $h++): 
-                                                                        // Vérifie si un cours existe déjà à cette heure
-                                                                        $currentRoomId = $dest['schedule_map'][$h]['room_id'] ?? '';
-                                                                        $currentDbId = $dest['schedule_map'][$h]['db_id'] ?? '';
+                                                                        // On récupère le Nom de la salle stocké (texte)
+                                                                        $currentRoomName = $dest['schedule_map'][$h] ?? '';
                                                                     ?>
                                                                         <div class="col-md-2 col-4 mb-2">
                                                                             <label class="small text-muted" style="font-size: 0.75rem;"><?php echo $h; ?>h-<?php echo $h+1; ?>h</label>
-                                                                            <input type="hidden" name="recipients[<?php echo $dest['id']; ?>][schedule_ids][<?php echo $h; ?>]" value="<?php echo $currentDbId; ?>">
                                                                             
-                                                                            <select name="recipients[<?php echo $dest['id']; ?>][schedule][<?php echo $h; ?>]" class="form-select form-select-sm" style="font-size: 0.75rem;">
+                                                                            <select name="recipients[<?php echo $dest['order_recipient_id']; ?>][schedule][<?php echo $h; ?>]" class="form-select form-select-sm" style="font-size: 0.75rem;">
                                                                                 <option value="" class="text-muted">- Vide -</option>
                                                                                 <?php foreach($allRooms as $rId => $rName): ?>
-                                                                                    <option value="<?php echo $rId; ?>" <?php if($currentRoomId == $rId) echo 'selected'; ?>><?php echo htmlspecialchars($rName); ?></option>
+                                                                                    <option value="<?php echo htmlspecialchars($rName); ?>" <?php if($currentRoomName === $rName) echo 'selected'; ?>>
+                                                                                        <?php echo htmlspecialchars($rName); ?>
+                                                                                    </option>
                                                                                 <?php endforeach; ?>
                                                                             </select>
                                                                         </div>
