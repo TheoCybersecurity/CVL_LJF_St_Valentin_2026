@@ -7,18 +7,18 @@ checkAccess('cvl');
 // --- 1. TRAITEMENT DES ACTIONS (POST) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
     
+    // On reçoit une liste d'IDs de la table order_recipients (les "cadeaux")
     $ids = explode(',', $_POST['recipient_ids']);
     $ids = array_map('intval', $ids);
     
-    // Récupération ID session
     $currentCvlId = $_SESSION['user_id'] ?? ($_SESSION['id'] ?? 0);
-
     $actionType = ''; 
 
     if (!empty($ids)) {
         $inQuery = implode(',', array_fill(0, count($ids), '?'));
         
         if (isset($_POST['mark_prepared'])) {
+            // On met à jour order_recipients
             $sql = "UPDATE order_recipients 
                     SET is_prepared = 1, 
                         prepared_at = NOW(), 
@@ -43,10 +43,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
         }
     }
     
-    // Redirection avec paramètres pour le Toast (géré par toast_notifications.php)
+    // Redirection (PRG Pattern)
     $queryParams = $_GET;
     $queryParams['last_action'] = $actionType;
-    $queryParams['last_ids'] = implode(',', $ids);
+    $queryParams['last_ids'] = implode(',', $ids); // Pour d'éventuels logs ou undo
     
     header("Location: preparation.php?" . http_build_query($queryParams));
     exit;
@@ -56,58 +56,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
 $view = isset($_GET['view']) ? $_GET['view'] : 'todo';
 $levelFilter = isset($_GET['level']) ? $_GET['level'] : 'all';
 
-// --- 3. REQUÊTE SQL ---
+// --- 3. REQUÊTE SQL MODIFIÉE ---
 $search = isset($_GET['q']) ? trim($_GET['q']) : '';
 
+// Alias utilisés :
+// ort = order_recipients (le lien commande <-> destinataire, contient le statut is_prepared)
+// r   = recipients (l'élève destinataire, contient nom, prenom, classe)
+// o   = orders
+// c   = classes
+// rr  = recipient_roses (détail des roses)
 $sql = "
     SELECT 
-        r.id as recipient_id, r.dest_nom, r.dest_prenom, r.is_anonymous, r.prepared_at, r.prepared_by_cvl_id,
+        ort.id as unique_gift_id, 
+        ort.is_anonymous, 
+        ort.prepared_at, 
+        ort.prepared_by_cvl_id,
+        
+        r.id as student_id,
+        r.nom as dest_nom, 
+        r.prenom as dest_prenom,
+        
         c.name as class_name,
         cl.group_alias,
+        
         o.buyer_prenom, o.buyer_nom,
-        rr.quantity, rp.name as rose_color
-    FROM order_recipients r
-    JOIN orders o ON r.order_id = o.id
+        
+        rr.quantity, 
+        rp.name as rose_color
+    FROM order_recipients ort
+    JOIN orders o ON ort.order_id = o.id
+    JOIN recipients r ON ort.recipient_id = r.id
     LEFT JOIN classes c ON r.class_id = c.id
     LEFT JOIN class_levels cl ON c.level_id = cl.id
-    LEFT JOIN recipient_roses rr ON r.id = rr.recipient_id
+    LEFT JOIN recipient_roses rr ON ort.id = rr.recipient_id
     LEFT JOIN rose_products rp ON rr.rose_product_id = rp.id
     WHERE o.is_paid = 1 
 ";
 
 // Filtre Vue (A faire / Fait)
 if ($view === 'done') {
-    $sql .= " AND r.is_prepared = 1 ";
+    $sql .= " AND ort.is_prepared = 1 ";
 } else {
-    $sql .= " AND r.is_prepared = 0 ";
+    $sql .= " AND ort.is_prepared = 0 ";
 }
 
-// Filtre Niveau (2nde, 1ere...)
+// Filtre Niveau
 if ($levelFilter !== 'all') {
     $sql .= " AND cl.group_alias = :filter ";
 }
 
-// Filtre Recherche (Nouveau)
+// Filtre Recherche
 if (!empty($search)) {
+    // On cherche sur le nom de l'élève (table r), ou l'acheteur (table o)
     $sql .= " AND (
-        r.dest_nom LIKE :s OR 
-        r.dest_prenom LIKE :s OR 
-        CONCAT(r.dest_prenom, ' ', r.dest_nom) LIKE :s OR
+        r.nom LIKE :s OR 
+        r.prenom LIKE :s OR 
+        CONCAT(r.prenom, ' ', r.nom) LIKE :s OR
         c.name LIKE :s OR
         o.buyer_nom LIKE :s OR 
         o.buyer_prenom LIKE :s OR
-        r.id LIKE :s
+        ort.id LIKE :s
     ) ";
 }
 
 // Tri
 if ($view === 'done') {
-    $sql .= " ORDER BY r.prepared_at DESC "; 
+    $sql .= " ORDER BY ort.prepared_at DESC "; 
 } else {
-    $sql .= " ORDER BY c.name ASC, r.dest_nom ASC ";
+    // Tri par Classe puis par Nom de l'élève
+    $sql .= " ORDER BY c.name ASC, r.nom ASC, r.prenom ASC ";
 }
 
-// Exécution avec paramètres dynamiques
 $stmt = $pdo->prepare($sql);
 $params = [];
 
@@ -122,26 +141,31 @@ $stmt->execute($params);
 $rawResults = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // --- 4. REGROUPEMENT ---
+// On regroupe par Classe -> Puis par Élève (Student ID)
 $groupedByClass = [];
 $totalRoses = 0;
 
 foreach ($rawResults as $row) {
     $className = $row['class_name'] ?? 'Sans Classe';
-    $studentKey = $row['dest_nom'] . '_' . $row['dest_prenom'];
+    // Clé unique pour l'élève (ID est plus sûr que le nom)
+    $studentId = $row['student_id']; 
     
-    if (!isset($groupedByClass[$className][$studentKey])) {
-        $groupedByClass[$className][$studentKey] = [
+    if (!isset($groupedByClass[$className][$studentId])) {
+        $groupedByClass[$className][$studentId] = [
             'name' => $row['dest_prenom'] . ' ' . $row['dest_nom'],
             'prepared_at' => $row['prepared_at'], 
             'preparator_id' => $row['prepared_by_cvl_id'],
-            'ids' => [], 
+            'ids' => [], // Liste des ID de order_recipients pour ce groupement
             'items' => [] 
         ];
     }
-    if (!in_array($row['recipient_id'], $groupedByClass[$className][$studentKey]['ids'])) {
-        $groupedByClass[$className][$studentKey]['ids'][] = $row['recipient_id'];
+    
+    // On ajoute l'ID du cadeau (order_recipients) s'il n'est pas déjà là
+    if (!in_array($row['unique_gift_id'], $groupedByClass[$className][$studentId]['ids'])) {
+        $groupedByClass[$className][$studentId]['ids'][] = $row['unique_gift_id'];
     }
-    $groupedByClass[$className][$studentKey]['items'][] = $row;
+    
+    $groupedByClass[$className][$studentId]['items'][] = $row;
     $totalRoses += $row['quantity'];
 }
 ?>
@@ -153,6 +177,7 @@ foreach ($rawResults as $row) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Preparation - CVL</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         body { background: #f0f2f5; padding-bottom: 50px; overflow-x: hidden; }
@@ -169,7 +194,6 @@ foreach ($rawResults as $row) {
         .nav-tabs .nav-link { color: #495057; font-weight: bold; cursor: pointer; }
         .nav-tabs .nav-link.active { color: #d63384; border-bottom: 3px solid #d63384; background: transparent; }
         
-        /* Scroll horizontal fluide */
         .scroll-container {
             overflow-x: auto;
             white-space: nowrap;
@@ -180,51 +204,33 @@ foreach ($rawResults as $row) {
         }
         .scroll-container::-webkit-scrollbar { display: none; }
 
-        /* --- ANIMATION MENU PDF (Correction Saut/Téléportation) --- */
+        /* Correction Menu PDF */
         .pdf-dropdown-menu {
-            /* 1. Style Visuel */
             background-color: #fff !important;
             border: 1px solid rgba(0,0,0,.15);
             border-radius: 0.375rem;
             box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
-
-            /* 2. Positionnement FORCÉ (Stop la téléportation) */
-            /* On prend le contrôle total sur Bootstrap */
             position: absolute !important;
-            top: 100% !important;     /* Juste sous le bouton */
-            right: 0 !important;      /* Aligné à droite du bouton */
-            left: auto !important;    /* On ignore l'alignement gauche */
-            margin-top: 8px !important; /* Petit espace sous le bouton */
-            transform: none !important; /* On interdit à Bootstrap d'utiliser transform pour la position */
-
-            /* 3. Animation (État FERMÉ) */
-            display: block !important; /* Toujours présent dans le DOM */
+            top: 100% !important;     
+            right: 0 !important;      
+            left: auto !important;   
+            margin-top: 8px !important;
+            transform: none !important; 
+            display: block !important; 
             visibility: hidden;
             opacity: 0;
-            /* On commence un peu plus haut (-10px) pour glisser vers le bas */
             transform: translateY(-10px) !important; 
-            
             transition: all 0.2s ease-in-out;
             pointer-events: none;
         }
-
-        /* 4. Animation (État OUVERT) */
         .pdf-dropdown-menu.show {
             visibility: visible;
             opacity: 1;
-            /* On revient à la position 0 (glissement terminé) */
             transform: translateY(0) !important;
             pointer-events: auto;
         }
-
-        /* 5. Liens */
-        .pdf-dropdown-menu .dropdown-item {
-            color: #212529 !important;
-            transition: background-color 0.2s;
-        }
-        .pdf-dropdown-menu .dropdown-item:hover {
-            background-color: #f8f9fa;
-        }
+        .pdf-dropdown-menu .dropdown-item { color: #212529 !important; transition: background-color 0.2s; }
+        .pdf-dropdown-menu .dropdown-item:hover { background-color: #f8f9fa; }
     </style>
 </head>
 <body>
@@ -375,7 +381,7 @@ foreach ($rawResults as $row) {
                                                 <?php else: ?> De : <strong><?php echo htmlspecialchars($item['buyer_prenom']); ?></strong> <?php endif; ?>
                                             </small>
                                         </div>
-                                        <span class="badge badge-id">#<?php echo $item['recipient_id']; ?></span>
+                                        <span class="badge badge-id">#<?php echo $item['unique_gift_id']; ?></span>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
