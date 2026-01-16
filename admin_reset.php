@@ -195,7 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             Conserve les comptes Admin et CVL.
                                         </div>
                                     </div>
-                                    <span class="badge bg-warning text-dark font-monospace">project_users (filtre)</span>
+                                    <span class="badge bg-warning text-dark font-monospace">users (filtre)</span>
                                 </label>
                             </div>
                         </div>
