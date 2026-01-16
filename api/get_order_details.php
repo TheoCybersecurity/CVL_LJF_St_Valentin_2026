@@ -7,7 +7,7 @@ error_reporting(E_ALL);
 session_start();
 require_once '../db.php';
 
-// 1. Vérification sécurité
+// 1. Sécurité
 if (!isset($_SESSION['user_id'])) {
     http_response_code(401);
     echo json_encode(['error' => 'Non connecté']);
@@ -24,7 +24,7 @@ if ($orderId === 0) {
 }
 
 try {
-    // 2. Récupérer la commande
+    // 2. Récupérer la commande principale
     $stmt = $pdo->prepare("SELECT * FROM orders WHERE id = ? AND user_id = ?");
     $stmt->execute([$orderId, $userId]);
     $order = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -34,46 +34,77 @@ try {
         exit;
     }
 
-    // 3. Récupérer les destinataires ET le nom de leur classe
-    // MODIFICATION ICI : On ajoute c.name (alias class_name) et le LEFT JOIN classes
+    // 3. Récupérer les destinataires (Nouvelle structure)
+    // On part de order_recipients (le lien)
+    // On joint recipients (pour le nom/prénom)
+    // On joint classes (pour le nom de la classe)
+    // On joint predefined_messages (pour le texte du message)
     $stmtDest = $pdo->prepare("
         SELECT 
-            r.*, 
-            m.content as message_text,
-            c.name as class_name 
-        FROM order_recipients r 
-        LEFT JOIN predefined_messages m ON r.message_id = m.id 
+            ort.id as order_recipient_id, -- L'ID de la ligne de commande
+            ort.is_anonymous,
+            ort.message_id,
+            r.id as student_id,           -- L'ID de la personne (pour chercher l'emploi du temps)
+            r.nom, 
+            r.prenom, 
+            c.id as class_id,
+            c.name as class_name,
+            m.content as message_text 
+        FROM order_recipients ort
+        JOIN recipients r ON ort.recipient_id = r.id
         LEFT JOIN classes c ON r.class_id = c.id
-        WHERE r.order_id = ?
+        LEFT JOIN predefined_messages m ON ort.message_id = m.id 
+        WHERE ort.order_id = ?
     ");
     $stmtDest->execute([$orderId]);
     $recipients = $stmtDest->fetchAll(PDO::FETCH_ASSOC);
 
-    // 4. Détails (Roses et Planning)
+    // Prépare la requête pour les Roses (liées à la ligne de commande)
+    // Note : dans recipient_roses, la colonne recipient_id correspond à order_recipients.id
+    $stmtRoses = $pdo->prepare("
+        SELECT rr.quantity, p.name 
+        FROM recipient_roses rr
+        JOIN rose_products p ON rr.rose_product_id = p.id
+        WHERE rr.recipient_id = ?
+    ");
+
+    // Prépare la requête pour l'Emploi du temps (liée à la personne)
+    // On récupère les colonnes h08 à h17 directement
+    $stmtSched = $pdo->prepare("
+        SELECT h08, h09, h10, h11, h12, h13, h14, h15, h16, h17
+        FROM schedules
+        WHERE recipient_id = ?
+    ");
+
+    // 4. Boucle pour enrichir chaque destinataire
     foreach ($recipients as &$dest) {
-        // Roses
-        $stmtRoses = $pdo->prepare("
-            SELECT rr.quantity, p.name 
-            FROM recipient_roses rr
-            JOIN rose_products p ON rr.rose_product_id = p.id
-            WHERE rr.recipient_id = ?
-        ");
-        $stmtRoses->execute([$dest['id']]);
+        // A. Récupération des Roses
+        $stmtRoses->execute([$dest['order_recipient_id']]);
         $dest['roses'] = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
 
-        // Emploi du temps
-        $stmtSched = $pdo->prepare("
-            SELECT rs.hour_slot, rm.name as room_name
-            FROM recipient_schedules rs
-            JOIN rooms rm ON rs.room_id = rm.id
-            WHERE rs.recipient_id = ?
-            ORDER BY rs.hour_slot ASC
-        ");
-        $stmtSched->execute([$dest['id']]);
-        $dest['schedule'] = $stmtSched->fetchAll(PDO::FETCH_ASSOC);
+        // B. Récupération de l'Emploi du temps
+        $stmtSched->execute([$dest['student_id']]);
+        $schedRow = $stmtSched->fetch(PDO::FETCH_ASSOC);
+        
+        $scheduleList = [];
+        if ($schedRow) {
+            // On transforme la ligne horizontale (h08, h09...) en liste verticale pour le JS
+            // Ex: [{hour: 8, room_name: "B102"}, {hour: 10, room_name: "CDI"}]
+            foreach ($schedRow as $col => $roomName) {
+                if (!empty($roomName)) {
+                    // $col est "h08", on enlève le 'h' pour avoir 08
+                    $hour = intval(substr($col, 1));
+                    $scheduleList[] = [
+                        'hour_slot' => $hour, // Je garde 'hour_slot' pour compatibilité avec ton JS existant
+                        'room_name' => $roomName
+                    ];
+                }
+            }
+        }
+        $dest['schedule'] = $scheduleList;
     }
 
-    // 5. Récupérer TOUTES les salles pour le mode édition
+    // 5. Récupérer TOUTES les salles (pour le select du mode édition)
     $stmtAllRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name ASC");
     $allRooms = $stmtAllRooms->fetchAll(PDO::FETCH_ASSOC);
 
