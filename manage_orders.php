@@ -16,82 +16,159 @@ $allRoseTypes = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
 // Grille tarifaire
 $stmtPrices = $pdo->query("SELECT quantity, price FROM roses_prices");
 $rosesPriceTable = $stmtPrices->fetchAll(PDO::FETCH_KEY_PAIR); 
+$maxQtyDefined = !empty($rosesPriceTable) ? max(array_keys($rosesPriceTable)) : 0;
 
 $allMessages = $pdo->query("SELECT id, content FROM predefined_messages ORDER BY position ASC, id ASC")->fetchAll(PDO::FETCH_KEY_PAIR);
 
 // --- 1. TRAITEMENT DES ACTIONS (POST) ---
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['order_id'])) {
-    $orderId = intval($_POST['order_id']);
-    $msgSuccess = "Action effectuée avec succès.";
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    
+    $msgSuccess = "";
+    $msgError = "";
+    $orderId = isset($_POST['order_id']) ? intval($_POST['order_id']) : 0;
 
     try {
-        if ($_POST['action'] === 'validate_payment') {
+        // --- A. SUPPRESSION TOTALE COMMANDE ---
+        if ($_POST['action'] === 'delete_order' && $orderId > 0) {
+            $pdo->beginTransaction();
+
+            // 1. Supprimer les roses
+            $sqlRoses = "DELETE rr FROM recipient_roses rr 
+                         INNER JOIN order_recipients ort ON rr.recipient_id = ort.id 
+                         WHERE ort.order_id = ?";
+            $stmt = $pdo->prepare($sqlRoses);
+            $stmt->execute([$orderId]);
+
+            // 2. Supprimer les destinataires
+            $stmt = $pdo->prepare("DELETE FROM order_recipients WHERE order_id = ?");
+            $stmt->execute([$orderId]);
+
+            // 3. Supprimer la commande
+            $stmt = $pdo->prepare("DELETE FROM orders WHERE id = ?");
+            $stmt->execute([$orderId]);
+
+            $pdo->commit();
+            $msgSuccess = "La commande #$orderId a été supprimée définitivement.";
+        }
+
+        // --- B. SUPPRESSION UN SEUL DESTINATAIRE ---
+        elseif ($_POST['action'] === 'delete_recipient' && $orderId > 0) {
+            $recipientToDeleteId = intval($_POST['target_recipient_id']);
+
+            if ($recipientToDeleteId > 0) {
+                $pdo->beginTransaction();
+
+                // 1. Supprimer les roses de ce destinataire
+                $pdo->prepare("DELETE FROM recipient_roses WHERE recipient_id = ?")->execute([$recipientToDeleteId]);
+                
+                // 2. Supprimer la liaison destinataire
+                $pdo->prepare("DELETE FROM order_recipients WHERE id = ?")->execute([$recipientToDeleteId]);
+
+                // 3. Vérifier s'il reste des destinataires
+                $stmtCount = $pdo->prepare("SELECT COUNT(*) FROM order_recipients WHERE order_id = ?");
+                $stmtCount->execute([$orderId]);
+                $remainingCount = $stmtCount->fetchColumn();
+
+                if ($remainingCount == 0) {
+                    // Si vide, suppression totale
+                    $pdo->prepare("DELETE FROM orders WHERE id = ?")->execute([$orderId]);
+                    $msgSuccess = "Dernier destinataire supprimé. La commande #$orderId a été annulée.";
+                } else {
+                    // 4. Recalcul du prix total
+                    $stmtRem = $pdo->prepare("SELECT id FROM order_recipients WHERE order_id = ?");
+                    $stmtRem->execute([$orderId]);
+                    $remainingIds = $stmtRem->fetchAll(PDO::FETCH_COLUMN);
+
+                    $newTotalPrice = 0.0;
+                    foreach($remainingIds as $rId) {
+                        $qStmt = $pdo->prepare("SELECT SUM(quantity) FROM recipient_roses WHERE recipient_id = ?");
+                        $qStmt->execute([$rId]);
+                        $qty = intval($qStmt->fetchColumn());
+
+                        if ($qty > 0) {
+                            if (isset($rosesPriceTable[$qty])) {
+                                $newTotalPrice += floatval($rosesPriceTable[$qty]);
+                            } else {
+                                $basePrice = $rosesPriceTable[$maxQtyDefined] ?? ($qty * 2); 
+                                if($qty > $maxQtyDefined) {
+                                    $newTotalPrice += ($qty * 2.00); 
+                                } else {
+                                    $newTotalPrice += $basePrice;
+                                }
+                            }
+                        }
+                    }
+                    $pdo->prepare("UPDATE orders SET total_price = ? WHERE id = ?")->execute([$newTotalPrice, $orderId]);
+                    $msgSuccess = "Destinataire supprimé. Nouveau total : " . number_format($newTotalPrice, 2) . " €";
+                }
+                $pdo->commit();
+            }
+        }
+
+        // --- C. VALIDATION PAIEMENT ---
+        elseif ($_POST['action'] === 'validate_payment' && $orderId > 0) {
             $adminId = $_SESSION['user_id'] ?? null; 
             $stmt = $pdo->prepare("UPDATE orders SET is_paid = 1, paid_at = NOW(), paid_by_cvl_id = ? WHERE id = ?");
             $stmt->execute([$adminId, $orderId]);
             $msgSuccess = "Paiement validé pour la commande #$orderId !";
         } 
-        elseif ($_POST['action'] === 'cancel_payment') {
+        
+        // --- D. ANNULATION PAIEMENT ---
+        elseif ($_POST['action'] === 'cancel_payment' && $orderId > 0) {
             $stmt = $pdo->prepare("UPDATE orders SET is_paid = 0, paid_at = NULL, paid_by_cvl_id = NULL WHERE id = ?");
             $stmt->execute([$orderId]);
             $msgSuccess = "Paiement annulé pour la commande #$orderId.";
         }
-        elseif ($_POST['action'] === 'edit_order') {
+
+        // --- E. UPDATE COMMANDE ---
+        elseif ($_POST['action'] === 'update_order' && $orderId > 0) {
             $pdo->beginTransaction();
             $calculatedTotalPrice = 0.0;
 
-            // =========================================================
-            // A. Mise à jour Infos Acheteur (CORRECTION : Table USERS)
-            // =========================================================
-            // 1. On récupère l'ID de l'utilisateur lié à la commande
+            // Update Acheteur
             $stmtGetUserId = $pdo->prepare("SELECT user_id FROM orders WHERE id = ?");
             $stmtGetUserId->execute([$orderId]);
             $userId = $stmtGetUserId->fetchColumn();
 
             if ($userId) {
-                // 2. On met à jour la table users
                 $buyerClass = !empty($_POST['buyer_class_id']) ? $_POST['buyer_class_id'] : NULL;
                 $stmtUserUpdate = $pdo->prepare("UPDATE users SET nom = ?, prenom = ?, class_id = ? WHERE user_id = ?");
                 $stmtUserUpdate->execute([$_POST['buyer_nom'], $_POST['buyer_prenom'], $buyerClass, $userId]);
             }
 
-            // =========================================================
-            // B. Mise à jour des Destinataires
-            // =========================================================
+            // Update Destinataires
             if (isset($_POST['recipients']) && is_array($_POST['recipients'])) {
                 foreach ($_POST['recipients'] as $orderRecipientId => $rData) {
-                    $orderRecipientId = intval($orderRecipientId); // ID du cadeau (order_recipients.id)
-                    $studentId = intval($rData['student_id']);     // ID de l'élève (recipients.id)
+                    $orderRecipientId = intval($orderRecipientId);
+                    $studentId = intval($rData['student_id']);
                     
-                    // 1. Mise à jour infos Élève (Table RECIPIENTS)
                     $destClass = !empty($rData['class_id']) ? $rData['class_id'] : NULL;
                     $stmtStudent = $pdo->prepare("UPDATE recipients SET nom = ?, prenom = ?, class_id = ? WHERE id = ?");
                     $stmtStudent->execute([$rData['nom'], $rData['prenom'], $destClass, $studentId]);
 
-                    // 2. Mise à jour infos Cadeau (Table ORDER_RECIPIENTS)
                     $isAnon = isset($rData['is_anonymous']) ? 1 : 0;
-                    $stmtGift = $pdo->prepare("UPDATE order_recipients SET is_anonymous = ?, message_id = ? WHERE id = ?");
-                    $stmtGift->execute([$isAnon, $rData['message_id'], $orderRecipientId]);
+                    
+                    // MODIFICATION ICI : Gestion du NULL pour le message_id
+                    $messageIdToSave = !empty($rData['message_id']) ? $rData['message_id'] : NULL;
 
-                    // 3. Mise à jour Quantités Roses & Calcul Prix
+                    $stmtGift = $pdo->prepare("UPDATE order_recipients SET is_anonymous = ?, message_id = ? WHERE id = ?");
+                    $stmtGift->execute([$isAnon, $messageIdToSave, $orderRecipientId]);
+
                     $totalRosesForRecipient = 0;
                     if (isset($rData['roses']) && is_array($rData['roses'])) {
                         foreach ($rData['roses'] as $roseLinkId => $qty) {
                             $qty = intval($qty);
                             if ($qty < 0) $qty = 0;
-                            
                             $stmtRose = $pdo->prepare("UPDATE recipient_roses SET quantity = ? WHERE id = ?");
                             $stmtRose->execute([$qty, $roseLinkId]);
                             $totalRosesForRecipient += $qty;
                         }
                     }
 
-                    // Calcul prix (Logique conservée)
                     if ($totalRosesForRecipient > 0) {
                         if (isset($rosesPriceTable[$totalRosesForRecipient])) {
                             $calculatedTotalPrice += floatval($rosesPriceTable[$totalRosesForRecipient]);
                         } else {
-                            $maxQtyDefined = max(array_keys($rosesPriceTable));
                             $basePrice = $rosesPriceTable[$maxQtyDefined] ?? ($totalRosesForRecipient * 2); 
                             if($totalRosesForRecipient > $maxQtyDefined) {
                                 $calculatedTotalPrice += ($totalRosesForRecipient * 2.00); 
@@ -101,11 +178,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
                         }
                     }
 
-                    // 4. Mise à jour Planning (Table SCHEDULES)
                     if (isset($rData['schedule']) && is_array($rData['schedule'])) {
                         $schedUpdates = [];
                         $schedValues = [];
-                        
                         foreach ($rData['schedule'] as $hour => $roomName) {
                             if ($hour >= 8 && $hour <= 17) {
                                 $colName = 'h' . str_pad($hour, 2, '0', STR_PAD_LEFT);
@@ -113,26 +188,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
                                 $schedValues[] = $roomName;
                             }
                         }
-
                         if (!empty($schedUpdates)) {
                             $sqlSched = "UPDATE schedules SET " . implode(', ', $schedUpdates) . " WHERE recipient_id = ?";
                             $schedValues[] = $studentId;
-                            $stmtSched = $pdo->prepare($sqlSched);
-                            $stmtSched->execute($schedValues);
+                            $pdo->prepare($sqlSched)->execute($schedValues);
                         }
                     }
                 }
             }
 
-            // 5. Mise à jour du PRIX TOTAL (Table ORDERS)
             $stmtPrice = $pdo->prepare("UPDATE orders SET total_price = ? WHERE id = ?");
             $stmtPrice->execute([$calculatedTotalPrice, $orderId]);
 
             $pdo->commit();
             $msgSuccess = "Commande #$orderId modifiée avec succès.";
         }
-        
-        header("Location: manage_orders.php?msg_success=" . urlencode($msgSuccess));
+
+        if ($msgSuccess) {
+            header("Location: manage_orders.php?msg_success=" . urlencode($msgSuccess));
+        } else {
+            header("Location: manage_orders.php");
+        }
         exit;
 
     } catch (Exception $e) {
@@ -142,7 +218,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['ord
     }
 }
 
-// --- 2. STATS (Inchangées) ---
+// --- 2. STATS ---
 $totalRevenue = $pdo->query("SELECT SUM(total_price) FROM orders WHERE is_paid = 1")->fetchColumn() ?: 0;
 $totalRoses = $pdo->query("SELECT SUM(quantity) FROM recipient_roses")->fetchColumn() ?: 0;
 $totalOrders = $pdo->query("SELECT COUNT(*) FROM orders")->fetchColumn() ?: 0;
@@ -152,7 +228,6 @@ $percentPaid = ($totalOrders > 0) ? round((($totalOrders - $countUnpaid) / $tota
 // --- 3. RECHERCHE ET AFFICHAGE ---
 $search = isset($_GET['q']) ? trim($_GET['q']) : '';
 
-// Requête adaptée : Jointure avec la table USERS pour l'acheteur
 $sql = "
     SELECT 
         o.id as order_id,
@@ -161,13 +236,11 @@ $sql = "
         o.is_paid, 
         o.paid_at, 
         
-        -- Infos Acheteur (Via Users)
         u.nom as buyer_nom, 
         u.prenom as buyer_prenom,
         u.class_id as buyer_class_id,
         c_buy.name as buyer_class_name,
         
-        -- Infos Destinataire
         ort.id as order_recipient_id,
         ort.is_anonymous, 
         ort.message_id,
@@ -182,24 +255,22 @@ $sql = "
         c_dest.name as dest_class_name,
         pm.content as message_content
     FROM orders o
-    JOIN users u ON o.user_id = u.user_id                   -- Jointure Acheteur
-    JOIN order_recipients ort ON o.id = ort.order_id        -- Jointure Liaison Cadeau
-    JOIN recipients r ON ort.recipient_id = r.id            -- Jointure Destinataire (Élève)
-    LEFT JOIN classes c_buy ON u.class_id = c_buy.id        -- Classe Acheteur
-    LEFT JOIN classes c_dest ON r.class_id = c_dest.id      -- Classe Destinataire
+    JOIN users u ON o.user_id = u.user_id 
+    JOIN order_recipients ort ON o.id = ort.order_id
+    JOIN recipients r ON ort.recipient_id = r.id 
+    LEFT JOIN classes c_buy ON u.class_id = c_buy.id
+    LEFT JOIN classes c_dest ON r.class_id = c_dest.id
     LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
 ";
 
 $params = [];
 if (!empty($search)) {
-    // Filtres mis à jour : on cherche sur 'u.' (users) au lieu de 'o.'
     $sql .= " WHERE 
         o.id LIKE :s OR 
         u.nom LIKE :s OR 
         u.prenom LIKE :s OR 
         CONCAT(u.prenom, ' ', u.nom) LIKE :s OR 
         c_buy.name LIKE :s OR 
-        
         r.nom LIKE :s OR 
         r.prenom LIKE :s OR 
         CONCAT(r.prenom, ' ', r.nom) LIKE :s OR 
@@ -238,12 +309,10 @@ foreach ($raw_results as $row) {
         ];
     }
 
-    // Récupérer les roses liées
     $stmtRoses = $pdo->prepare("SELECT rr.id as rose_link_id, rr.quantity, rr.rose_product_id, rp.name FROM recipient_roses rr JOIN rose_products rp ON rr.rose_product_id = rp.id WHERE rr.recipient_id = ?");
     $stmtRoses->execute([$row['order_recipient_id']]);
     $roses = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
 
-    // Récupérer l'emploi du temps
     $stmtSchedule = $pdo->prepare("SELECT h08, h09, h10, h11, h12, h13, h14, h15, h16, h17 FROM schedules WHERE recipient_id = ?");
     $stmtSchedule->execute([$row['student_id']]);
     $schedRow = $stmtSchedule->fetch(PDO::FETCH_ASSOC);
@@ -536,8 +605,10 @@ foreach ($raw_results as $row) {
                                         </div>
                                         <form method="POST">
                                             <div class="modal-body">
-                                                <input type="hidden" name="action" value="edit_order">
+                                                <input type="hidden" name="action" value="update_order">
                                                 <input type="hidden" name="order_id" value="<?php echo $order['info']['id']; ?>">
+                                                
+                                                <input type="hidden" name="target_recipient_id" id="target_recipient_<?php echo $order['info']['id']; ?>" value="">
 
                                                 <h6 class="text-primary fw-bold border-bottom pb-2">👤 Informations Acheteur</h6>
                                                 <div class="row g-3 mb-3">
@@ -565,7 +636,14 @@ foreach ($raw_results as $row) {
                                                 <?php foreach($order['recipients'] as $index => $dest): ?>
                                                     <div class="card mb-3 bg-light border-0">
                                                         <div class="card-body">
-                                                            <h6 class="text-danger fw-bold border-bottom pb-2">❤️ Destinataire <?php echo $index + 1; ?></h6>
+                                                            <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-3">
+                                                                <h6 class="text-danger fw-bold mb-0">❤️ Destinataire <?php echo $index + 1; ?></h6>
+                                                                <button type="submit" name="action" value="delete_recipient" 
+                                                                        onclick="document.getElementById('target_recipient_<?php echo $order['info']['id']; ?>').value='<?php echo $dest['order_recipient_id']; ?>'; return confirm('Voulez-vous supprimer UNIQUEMENT ce destinataire ?\n\nLe prix total de la commande sera recalculé automatiquement.');" 
+                                                                        class="btn btn-sm btn-outline-danger" title="Supprimer ce destinataire uniquement">
+                                                                    <i class="fas fa-trash-alt"></i> Supprimer ce destinataire
+                                                                </button>
+                                                            </div>
                                                             
                                                             <input type="hidden" name="recipients[<?php echo $dest['order_recipient_id']; ?>][student_id]" value="<?php echo $dest['student_id']; ?>">
 
@@ -614,6 +692,7 @@ foreach ($raw_results as $row) {
                                                             <div class="mb-3">
                                                                 <label class="small fw-bold">Message</label>
                                                                 <select name="recipients[<?php echo $dest['order_recipient_id']; ?>][message_id]" class="form-select form-select-sm">
+                                                                    <option value="">-- Pas de message --</option>
                                                                     <?php foreach($allMessages as $msgId => $msgContent): ?>
                                                                         <option value="<?php echo $msgId; ?>" <?php if($dest['message_id'] == $msgId) echo 'selected'; ?>>
                                                                             <?php echo htmlspecialchars($msgContent); ?>
@@ -651,8 +730,12 @@ foreach ($raw_results as $row) {
 
                                             </div>
                                             <div class="modal-footer">
+                                                <button type="submit" name="action" value="delete_order" class="btn btn-danger me-auto" onclick="return confirm('⚠️ ATTENTION : Êtes-vous sûr de vouloir SUPPRIMER définitivement toute la commande ?\n\nCette action est irréversible.');">
+                                                    <i class="fas fa-trash"></i> Supprimer Commande
+                                                </button>
+
                                                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fermer</button>
-                                                <button type="submit" class="btn btn-primary" onclick="return confirm('Confirmer les modifications ? Le prix total sera recalculé.');">Enregistrer</button>
+                                                <button type="submit" name="action" value="update_order" class="btn btn-primary" onclick="return confirm('Confirmer les modifications ? Le prix total sera recalculé.');">Enregistrer</button>
                                             </div>
                                         </form>
                                     </div>
