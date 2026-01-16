@@ -193,7 +193,7 @@ $timeSlots = range(8, 17);
     </div>
 
     <div class="d-grid gap-2">
-        <button id="btn-validate-order" class="btn btn-success btn-lg" disabled>✅ Valider et Payer</button>
+        <button id="btn-validate-order" class="btn btn-success btn-lg" disabled>✅ Valider la commande</button>
     </div>
 </div>
 
