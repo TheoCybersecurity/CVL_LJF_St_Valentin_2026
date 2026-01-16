@@ -1,7 +1,7 @@
 <?php
 // api/submit_order.php
 header('Content-Type: application/json');
-ini_set('display_errors', 0); // En prod
+ini_set('display_errors', 0);
 error_reporting(E_ALL);
 
 session_start();
@@ -39,7 +39,7 @@ try {
         $stmtUser->execute([':id' => $current_user_id, ':n' => $buyerNom, ':p' => $buyerPrenom, ':c' => $buyerClassId]);
     }
 
-    // 2. Calcul Prix Total
+    // 2. Calcul Prix (Identique)
     $pricesStmt = $pdo->query("SELECT quantity, price FROM roses_prices");
     $priceList = $pricesStmt->fetchAll(PDO::FETCH_KEY_PAIR);
     
@@ -67,77 +67,86 @@ try {
         }
     }
 
-    // 3. Création de la commande
+    // 3. Création Commande
     $stmtOrder = $pdo->prepare("INSERT INTO orders (user_id, buyer_nom, buyer_prenom, buyer_class_id, total_price, created_at) VALUES (?, ?, ?, ?, ?, NOW())");
     $stmtOrder->execute([$current_user_id, $buyerNom, $buyerPrenom, $buyerClassId, $totalOrderPrice]);
     $orderId = $pdo->lastInsertId();
 
-    // 4. Traitement des Destinataires
+    // 4. Traitement des Destinataires (NOUVELLE LOGIQUE)
     $roomMap = [];
     $stmtRooms = $pdo->query("SELECT id, name FROM rooms");
     while($row = $stmtRooms->fetch()){ $roomMap[$row['id']] = $row['name']; }
 
-    $stmtInsertDest = $pdo->prepare("INSERT INTO order_recipients (order_id, recipient_schedule_id, dest_nom, dest_prenom, class_id, message_id, is_anonymous) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    // Préparation des requêtes
+    // A. IDENTITÉ
+    $stmtNewRecipient = $pdo->prepare("INSERT INTO recipients (nom, prenom, class_id) VALUES (?, ?, ?)");
+    $stmtUpdateClass = $pdo->prepare("UPDATE recipients SET class_id = ? WHERE id = ?");
+    
+    // B. HORAIRES (On supprime les anciens horaires pour cet ID et on remet les nouveaux, c'est plus simple que l'update colonne par colonne)
+    $stmtDeleteSchedule = $pdo->prepare("DELETE FROM schedules WHERE recipient_id = ?");
+    $stmtInsertSchedule = $pdo->prepare("INSERT INTO schedules (recipient_id, h08, h09, h10, h11, h12, h13, h14, h15, h16, h17) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+
+    // C. LIEN COMMANDE
+    $stmtInsertOrderDest = $pdo->prepare("INSERT INTO order_recipients (order_id, recipient_id, message_id, is_anonymous) VALUES (?, ?, ?, ?)");
     $stmtRose = $pdo->prepare("INSERT INTO recipient_roses (recipient_id, rose_product_id, quantity) VALUES (?,?,?)");
 
-    // --- REQUÊTES MISES À JOUR (PLUS DE COLONNE 'CLASSE') ---
-    
-    // Update : on ne met à jour que class_id
-    $stmtUpdateClass = $pdo->prepare("UPDATE recipient_schedules SET class_id = ? WHERE id = ?");
-    
-    // Insert : on insère que class_id
-    $stmtNewSchedule = $pdo->prepare("INSERT INTO recipient_schedules (nom, prenom, class_id, h08, h09, h10, h11, h12, h13, h14, h15, h16, h17) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-
     foreach ($cart as $dest) {
-        $finalScheduleId = null;
-        $scheduleIdInput = isset($dest['scheduleId']) ? intval($dest['scheduleId']) : 0;
+        $recipientId = isset($dest['scheduleId']) ? intval($dest['scheduleId']) : 0; // scheduleId est en fait l'ID de la personne (ex-recipient_schedules)
+        $destClassId = intval($dest['classId']);
         
-        $destClassId = intval($dest['classId']); // ID uniquement
-
-        // A. L'élève existe déjà
-        if ($scheduleIdInput > 0) {
-            $finalScheduleId = $scheduleIdInput;
-            // Si l'utilisateur a spécifié une classe, on met à jour la fiche
+        // --- 1. GESTION DE L'IDENTITÉ ---
+        if ($recipientId > 0) {
+            // L'élève existe déjà
             if ($destClassId > 0) {
-                $stmtUpdateClass->execute([$destClassId, $finalScheduleId]);
+                $stmtUpdateClass->execute([$destClassId, $recipientId]);
             }
-        } 
-        // B. Nouvel élève (Manuel)
-        else {
-            $hours = array_fill(8, 10, null);
-            if (isset($dest['schedule']) && is_array($dest['schedule'])) {
-                foreach ($dest['schedule'] as $slot) {
-                    $h = intval($slot['hour']);
-                    $rId = $slot['roomId'];
-                    if ($h >= 8 && $h <= 17 && isset($roomMap[$rId])) {
-                        $hours[$h] = $roomMap[$rId];
-                    }
-                }
-            }
-
-            $stmtNewSchedule->execute([
+        } else {
+            // Nouvel élève
+            $stmtNewRecipient->execute([
                 $dest['nom'], 
                 $dest['prenom'], 
-                ($destClassId > 0 ? $destClassId : null), 
+                ($destClassId > 0 ? $destClassId : null)
+            ]);
+            $recipientId = $pdo->lastInsertId();
+        }
+
+        // --- 2. GESTION DES HORAIRES (Uniquement si saisie manuelle) ---
+        // Si c'est un nouvel élève OU si on veut écraser l'emploi du temps (optionnel, ici on le fait pour les nouveaux)
+        // Dans ton JS actuel, si on sélectionne un élève existant, on n'envoie pas de 'schedule' array.
+        
+        if (isset($dest['schedule']) && is_array($dest['schedule']) && count($dest['schedule']) > 0) {
+            $hours = array_fill(8, 10, null);
+            foreach ($dest['schedule'] as $slot) {
+                $h = intval($slot['hour']);
+                $rId = $slot['roomId'];
+                if ($h >= 8 && $h <= 17 && isset($roomMap[$rId])) {
+                    $hours[$h] = $roomMap[$rId];
+                }
+            }
+            
+            // On nettoie s'il y avait un vieux schedule (cas rare mais propre)
+            $stmtDeleteSchedule->execute([$recipientId]);
+            
+            // On insère le nouveau
+            $stmtInsertSchedule->execute([
+                $recipientId,
                 $hours[8], $hours[9], $hours[10], $hours[11], $hours[12],
                 $hours[13], $hours[14], $hours[15], $hours[16], $hours[17]
             ]);
-            $finalScheduleId = $pdo->lastInsertId();
         }
+        // NOTE : Si l'élève existe déjà et qu'on n'a pas touché au planning, on ne fait rien dans la table schedules, on garde l'ancien.
 
-        // Lien Commande <-> Destinataire
+        // --- 3. LIEN COMMANDE ---
         $msgId = !empty($dest['messageId']) ? $dest['messageId'] : null;
-        $stmtInsertDest->execute([
+        $stmtInsertOrderDest->execute([
             $orderId, 
-            $finalScheduleId, 
-            $dest['nom'], 
-            $dest['prenom'], 
-            ($destClassId > 0 ? $destClassId : null), 
+            $recipientId, 
             $msgId, 
             $dest['isAnonymous'] ? 1 : 0
         ]);
-        $destId = $pdo->lastInsertId();
+        $destId = $pdo->lastInsertId(); // ID dans la table de liaison order_recipients
 
+        // --- 4. ROSES ---
         foreach ($dest['roses'] as $rose) {
             if ($rose['qty'] > 0 && in_array($rose['id'], $validProductIds)) {
                 $stmtRose->execute([$destId, $rose['id'], $rose['qty']]);
