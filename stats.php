@@ -347,7 +347,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <small class="text-uppercase text-muted fw-bold d-none d-md-block">Paiements Validés</small>
                     <small class="text-uppercase text-muted fw-bold d-md-none">Payé</small>
-                    <i class="fas fa-check-circle text-primary fa-lg"></i>
+                    <i class="fas fa-clipboard-list text-primary fa-lg"></i>
                 </div>
                 <h3 class="fw-bold text-dark mb-0"><?php echo $percentPaid; ?>%</h3>
                 <div class="progress mt-2" style="height: 6px;">
@@ -361,7 +361,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <small class="text-uppercase text-muted fw-bold d-none d-md-block">Commandes Préparées</small>
                     <small class="text-uppercase text-muted fw-bold d-md-none">Prêt</small>
-                    <i class="fas fa-gift text-warning fa-lg"></i>
+                    <i class="fas fa-boxes text-warning fa-lg"></i>
                 </div>
                 <h3 class="fw-bold text-dark mb-0"><?php echo $percentPrep; ?>%</h3>
                 <div class="progress mt-2" style="height: 6px;">
@@ -375,7 +375,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
             <div class="card border-0 shadow-sm p-3 h-100 bg-white border-bottom border-success border-4 card-stat-mini">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <small class="text-uppercase text-muted fw-bold">Distribution</small>
-                    <i class="fas fa-shipping-fast text-success fa-lg"></i>
+                    <i class="fas fa-truck text-success fa-lg"></i>
                 </div>
                 <h3 class="fw-bold text-dark mb-0"><?php echo $percentDist; ?>%</h3>
                 <div class="progress mt-2" style="height: 6px;">
