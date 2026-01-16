@@ -233,7 +233,11 @@ if ($searchQuery) {
 
     <div class="row mb-4 align-items-center">
         <div class="col-12">
-            <h2 class="fw-bold text-success"><i class="fas fa-truck"></i> Distribution</h2>
+            <a href="manage_orders.php" class="text-decoration-none text-muted">
+                <i class="fas fa-arrow-left"></i> Retour Tableau de bord
+            </a>
+
+            <h2 class="fw-bold text-success mt-2"><i class="fas fa-truck"></i> Distribution</h2>
             
             <?php if($view === 'todo'): ?>
                 <p class="text-muted">

@@ -244,7 +244,11 @@ foreach ($rawResults as $row) {
     
     <div class="row mb-4 align-items-center">
        <div class="col-md-7">
-            <h2 class="fw-bold text-primary"><i class="fas fa-boxes"></i> Préparation</h2>
+            <a href="manage_orders.php" class="text-decoration-none text-muted">
+                <i class="fas fa-arrow-left"></i> Retour Tableau de bord
+            </a>
+            
+            <h2 class="fw-bold text-primary mt-2"><i class="fas fa-boxes"></i> Préparation</h2>
             
             <?php if($view === 'todo'): ?>
                 <p class="text-muted">Reste à faire : <strong><?php echo $totalRoses; ?></strong> roses.</p>
