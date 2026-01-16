@@ -60,11 +60,12 @@ $levelFilter = isset($_GET['level']) ? $_GET['level'] : 'all';
 $search = isset($_GET['q']) ? trim($_GET['q']) : '';
 
 // Alias utilisés :
-// ort = order_recipients (le lien commande <-> destinataire, contient le statut is_prepared)
-// r   = recipients (l'élève destinataire, contient nom, prenom, classe)
+// ort = order_recipients 
+// r   = recipients 
 // o   = orders
+// u   = users (NOUVEAU : pour l'acheteur)
 // c   = classes
-// rr  = recipient_roses (détail des roses)
+// rr  = recipient_roses 
 $sql = "
     SELECT 
         ort.id as unique_gift_id, 
@@ -79,12 +80,14 @@ $sql = "
         c.name as class_name,
         cl.group_alias,
         
-        o.buyer_prenom, o.buyer_nom,
+        u.prenom as buyer_prenom, 
+        u.nom as buyer_nom,
         
         rr.quantity, 
         rp.name as rose_color
     FROM order_recipients ort
     JOIN orders o ON ort.order_id = o.id
+    JOIN users u ON o.user_id = u.user_id        -- AJOUT DE LA JOINTURE USERS
     JOIN recipients r ON ort.recipient_id = r.id
     LEFT JOIN classes c ON r.class_id = c.id
     LEFT JOIN class_levels cl ON c.level_id = cl.id
@@ -107,14 +110,14 @@ if ($levelFilter !== 'all') {
 
 // Filtre Recherche
 if (!empty($search)) {
-    // On cherche sur le nom de l'élève (table r), ou l'acheteur (table o)
+    // Correction ici : on cherche dans u.nom/prenom au lieu de o.buyer_nom/prenom
     $sql .= " AND (
         r.nom LIKE :s OR 
         r.prenom LIKE :s OR 
         CONCAT(r.prenom, ' ', r.nom) LIKE :s OR
         c.name LIKE :s OR
-        o.buyer_nom LIKE :s OR 
-        o.buyer_prenom LIKE :s OR
+        u.nom LIKE :s OR 
+        u.prenom LIKE :s OR
         ort.id LIKE :s
     ) ";
 }
