@@ -60,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // --- 1. GESTION DES ROSES ---
         if ($action === 'add_rose') {
             // Suppression du prix et de is_active (mis à 1 par défaut)
-            $stmt = $pdo->prepare("INSERT INTO rose_products (name, is_active) VALUES (?, 1)");
+            $stmt = $pdo->prepare("INSERT INTO rose_products (name) VALUES (?)");
             $stmt->execute([$_POST['name']]);
             setToast('success', 'Nouvelle variété ajoutée.');
             redirect('roses');
