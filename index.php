@@ -1,25 +1,24 @@
 <?php
+// index.php
 session_start();
 require_once 'db.php';
-require_once 'auth_check.php'; // On s'assure que l'auth est chargée
+require_once 'auth_check.php'; 
 
 // --- VERIFICATION AUTH ---
 $is_logged_in = false;
 $user_info = null;
 
 if (isset($_COOKIE['jwt'])) {
-    // La vérification est déjà faite via auth_check mais on sécurise la variable
     $is_logged_in = true;
     $stmt = $pdo->prepare("SELECT * FROM project_users WHERE user_id = ?");
     $stmt->execute([$current_user_id]);
     $user_info = $stmt->fetch();
 } else {
-    // Si pas de cookie, redirection
     header("Location: welcome.php");
     exit;
 }
 
-// --- RECUPERATION DES COMMANDES AVEC STATUTS DÉTAILLÉS ---
+// --- RECUPERATION DES COMMANDES ---
 // On utilise SUM pour compter combien de destinataires ont passé chaque étape
 $sql = "
     SELECT 
@@ -40,7 +39,6 @@ $orders = $stmt->fetchAll();
 // Vérification de l'ouverture des ventes
 $stmt = $pdo->prepare("SELECT setting_value FROM global_settings WHERE setting_key = 'sales_open'");
 $stmt->execute();
-// Si la ligne n'existe pas, on considère que c'est ouvert par défaut (ou false, selon ta préférence)
 $isSalesOpen = $stmt->fetchColumn() == '1';
 ?>
 
@@ -169,9 +167,6 @@ $isSalesOpen = $stmt->fetchColumn() == '1';
 </div>
 
 <script>
-// 1. Variable globale définie TOUT EN HAUT pour éviter les bugs
-let globalRooms = [];
-
 /**
  * Formate une date string en "14/02/2024 à 10:30"
  */
@@ -206,29 +201,19 @@ function showOrderDetails(orderId) {
     modalOrderId.innerText = String(orderId).padStart(4, '0');
     modalContent.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-danger" role="status"></div><br><span class="text-muted mt-2 d-block">Chargement des informations...</span></div>';
     
-    // 1. Récupération de l'élément HTML
+    // Ouverture Modale Bootstrap
     const modalElement = document.getElementById('orderDetailsModal');
-
     if (modalElement) {
-        // 2. On récupère l'instance Bootstrap existante (si elle a déjà été ouverte)
         let modalInstance = bootstrap.Modal.getInstance(modalElement);
-
-        // 3. Si aucune instance n'existe, on la crée
         if (!modalInstance) {
             modalInstance = new bootstrap.Modal(modalElement);
         }
-
-        // 4. L'ASTUCE EST ICI :
-        // On demande d'afficher la modale SEULEMENT si elle n'est pas déjà visible (classe 'show')
-        // Si elle est déjà là (cas de la sauvegarde), on ne fait rien (le contenu a déjà été mis à jour par le code au-dessus)
         if (!modalElement.classList.contains('show')) {
             modalInstance.show();
         }
-    } else {
-        console.error("Erreur : Impossible de trouver la modale avec l'ID 'orderModal'. Vérifie ton HTML !");
     }
 
-    // Appel API (sans .php comme tu l'as configuré)
+    // Appel API
     fetch(`api/get_order_details?id=${orderId}`)
     .then(response => {
         if (!response.ok) { throw new Error("Erreur HTTP " + response.status); }
@@ -240,15 +225,11 @@ function showOrderDetails(orderId) {
             return;
         }
 
-        // On stocke les salles pour l'usage dans le mode édition
-        globalRooms = data.all_rooms;
-
-        // --- 1. GESTION DU TEXTE "TOTAL" ---
+        // --- EN-TÊTE ---
         const isPaid = (data.order.is_paid == 1);
         const labelTotal = isPaid ? "Total Payé" : "Total à Payer";
         const colorTotal = isPaid ? "text-success" : "text-danger";
 
-        // --- EN-TÊTE ---
         let html = `
             <div class="alert alert-light border d-flex justify-content-between align-items-center mb-4 rounded-3 shadow-sm">
                 <div>
@@ -261,14 +242,14 @@ function showOrderDetails(orderId) {
                 </div>
             </div>
             
-            <h6 class="fw-bold mb-3 text-secondary"><i class="fas fa-users me-2"></i>Destinataires et Suivi</h6>
+            <h6 class="fw-bold mb-3 text-secondary"><i class="fas fa-users me-2"></i>Destinataires</h6>
             <div class="d-flex flex-column gap-3">
         `;
 
         // --- BOUCLE DESTINATAIRES ---
         data.recipients.forEach(dest => {
             
-            // --- 2. BADGES ROSES ---
+            // Roses Badges
             let rosesHtml = dest.roses.map(r => {
                 let nameLower = r.name.toLowerCase();
                 let badgeClass = "bg-secondary text-white";
@@ -284,7 +265,7 @@ function showOrderDetails(orderId) {
                         </span>`;
             }).join('');
 
-            // --- TIMELINE LOGIC ---
+            // Timeline Logic
             const isPrepared = (dest.is_prepared == 1);
             const isDistributed = (dest.is_distributed == 1);
 
@@ -319,64 +300,11 @@ function showOrderDetails(orderId) {
                 </div>
             `;
 
-            // --- DETAILS DESTINATAIRE ---
-            let className = dest.class_name ? dest.class_name : (dest.class_id ? dest.class_id : "Classe inconnue");
+            // Data Adaptation (New DB Structure)
+            // L'API renvoie maintenant "nom" et "prenom" (pas dest_nom)
+            let fullName = `${dest.prenom} ${dest.nom}`;
+            let className = dest.class_name ? dest.class_name : "Classe inconnue";
             let anonBadge = dest.is_anonymous == 1 ? '<span class="badge bg-dark ms-2"><i class="fas fa-user-secret"></i> Anonyme</span>' : '';
-
-            // --- LOCALISATION ---
-            
-            // Vue Lecture
-            let scheduleViewHtml = '';
-            if(dest.schedule && dest.schedule.length > 0) {
-                 scheduleViewHtml = dest.schedule.map(s => 
-                    `<div class="text-muted small mb-1"><i class="far fa-clock"></i> ${s.hour_slot}h - ${parseInt(s.hour_slot)+1}h : <strong>${s.room_name}</strong></div>`
-                ).join('');
-            } else {
-                 scheduleViewHtml = '<span class="text-danger small"> <i class="fas fa-exclamation-circle"></i> Aucune salle définie</span>';
-            }
-
-            // Vue ÉDITION (Cachée)
-            let scheduleEditHtml = `<form id="form-schedule-${dest.id}" class="mt-2">`;
-            
-            let slotsToEdit = (dest.schedule && dest.schedule.length > 0) ? dest.schedule : [{hour_slot: 8, room_id: ''}];
-
-            slotsToEdit.forEach(s => {
-                scheduleEditHtml += `
-                    <div class="input-group input-group-sm mb-2 schedule-row">
-                        <span class="input-group-text"><i class="far fa-clock"></i></span>
-                        <select class="form-select schedule-hour" style="max-width: 80px;">
-                            ${[8,9,10,11,12,13,14,15,16,17].map(h => 
-                                `<option value="${h}" ${h == s.hour_slot ? 'selected' : ''}>${h}h</option>`
-                            ).join('')}
-                        </select>
-                        <select class="form-select schedule-room">
-                            ${data.all_rooms.map(room => {
-                                // DOUBLE SÉCURITÉ :
-                                // 1. On compare les ID (avec == pour ignorer la différence texte/chiffre)
-                                let matchId = (room.id == s.room_id);
-                                // 2. On compare aussi les NOMS au cas où (ex: "E401" == "E401")
-                                let matchName = (s.room_name && room.name == s.room_name);
-                                
-                                // Si l'un des deux est bon, on sélectionne
-                                let isSelected = (matchId || matchName) ? 'selected' : '';
-                                
-                                return `<option value="${room.id}" ${isSelected}>${room.name}</option>`;
-                            }).join('')}
-                        </select>
-                        <button type="button" class="btn btn-outline-danger" onclick="removeScheduleRow(this)"><i class="fas fa-times"></i></button>
-                    </div>
-                `;
-            });
-            
-            scheduleEditHtml += `
-                <div class="d-flex justify-content-between mt-2">
-                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addScheduleSlot(${dest.id})"><i class="fas fa-plus"></i> Ajouter créneau</button>
-                    <div>
-                        <button type="button" class="btn btn-sm btn-light border" onclick="toggleEditMode(${dest.id})">Annuler</button>
-                        <button type="button" class="btn btn-sm btn-success" onclick="saveSchedule(${dest.id})">Enregistrer</button>
-                    </div>
-                </div>
-            </form>`;
 
             html += `
                 <div class="card border-0 shadow-sm bg-white rounded-3">
@@ -384,7 +312,7 @@ function showOrderDetails(orderId) {
                         <div class="d-flex justify-content-between align-items-start mb-3">
                             <div>
                                 <h5 class="mb-1 fw-bold text-dark">
-                                    ${dest.dest_prenom} ${dest.dest_nom}
+                                    ${fullName}
                                     ${anonBadge}
                                 </h5>
                                 <div class="badge bg-light text-secondary border">${className}</div>
@@ -396,28 +324,11 @@ function showOrderDetails(orderId) {
 
                         ${timelineHtml}
 
-                        <div class="bg-light p-3 rounded-3 mt-3">
-                            ${dest.message_text ? 
-                                `<p class="mb-2 small fst-italic text-muted"><i class="fas fa-quote-left me-2 text-primary"></i>${dest.message_text}</p>` : 
-                                `<p class="mb-2 small text-muted fst-italic">Aucun message joint.</p>`
-                            }
-                            <hr class="my-2 opacity-25">
-                            
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <strong class="small text-uppercase text-secondary">📍 Localisation prévue :</strong>
-                                <button class="btn btn-link p-0 text-primary small text-decoration-none" id="btn-edit-${dest.id}" onclick="toggleEditMode(${dest.id})">
-                                    <i class="fas fa-pen"></i> Modifier
-                                </button>
-                            </div>
-                            
-                            <div id="view-schedule-${dest.id}">
-                                ${scheduleViewHtml}
-                            </div>
-
-                            <div id="edit-schedule-${dest.id}" class="d-none">
-                                ${scheduleEditHtml}
-                            </div>
-                        </div>
+                        ${dest.message_text ? 
+                            `<div class="bg-light p-3 rounded-3 mt-3">
+                                <p class="mb-0 small fst-italic text-muted"><i class="fas fa-quote-left me-2 text-primary"></i>${dest.message_text}</p>
+                             </div>` : ''
+                        }
                     </div>
                 </div>
             `;
@@ -429,136 +340,6 @@ function showOrderDetails(orderId) {
     .catch(err => {
         console.error(err);
         modalContent.innerHTML = '<div class="alert alert-danger">Impossible de charger les détails.</div>';
-    });
-}
-
-// Fonctions Utilitaires
-
-function toggleEditMode(id) {
-    const viewDiv = document.getElementById(`view-schedule-${id}`);
-    const editDiv = document.getElementById(`edit-schedule-${id}`);
-    const btnEdit = document.getElementById(`btn-edit-${id}`);
-
-    if (viewDiv.classList.contains('d-none')) {
-        viewDiv.classList.remove('d-none');
-        editDiv.classList.add('d-none');
-        btnEdit.classList.remove('d-none');
-    } else {
-        viewDiv.classList.add('d-none');
-        editDiv.classList.remove('d-none');
-        btnEdit.classList.add('d-none');
-    }
-}
-
-function removeScheduleRow(btn) {
-    // 1. On cible la ligne parente (le div .input-group)
-    const row = btn.parentElement;
-    
-    // 2. On ajoute la classe qui lance l'animation CSS
-    row.classList.add('removing-row');
-
-    // 3. On attend la fin de l'animation (300ms) pour supprimer vraiment l'élément du DOM
-    row.addEventListener('animationend', () => {
-        row.remove();
-    });
-}
-
-function addScheduleSlot(destId) {
-    const form = document.getElementById(`form-schedule-${destId}`);
-    const btnContainer = form.querySelector('.d-flex'); // Le div des boutons
-    
-    // 1. On liste les heures DÉJÀ sélectionnées dans le formulaire
-    const existingSelects = form.querySelectorAll('.schedule-hour');
-    let usedHours = [];
-    existingSelects.forEach(select => {
-        usedHours.push(parseInt(select.value));
-    });
-
-    // 2. On cherche la première heure libre entre 8h et 17h
-    let nextFreeHour = null;
-    for (let h = 8; h <= 17; h++) {
-        if (!usedHours.includes(h)) {
-            nextFreeHour = h;
-            break; // On a trouvé, on s'arrête
-        }
-    }
-
-    // 3. Si tout est pris, on alerte et on n'ajoute rien
-    if (nextFreeHour === null) {
-        alert("Tous les créneaux horaires (8h-17h) sont déjà utilisés pour ce destinataire !");
-        return;
-    }
-
-    // 4. Création du HTML avec l'heure libre présélectionnée
-    let roomOptions = globalRooms.map(room => `<option value="${room.id}">${room.name}</option>`).join('');
-    
-    const newRow = document.createElement('div');
-    newRow.className = 'input-group input-group-sm mb-2 schedule-row new-row-anim';
-    
-    // On génère les options d'heure en sélectionnant 'nextFreeHour'
-    let hoursOptions = '';
-    for(let h=8; h<=17; h++) {
-        let isSelected = (h === nextFreeHour) ? 'selected' : '';
-        hoursOptions += `<option value="${h}" ${isSelected}>${h}h</option>`;
-    }
-
-    newRow.innerHTML = `
-        <span class="input-group-text"><i class="far fa-clock"></i></span>
-        <select class="form-select schedule-hour" style="max-width: 80px;">
-            ${hoursOptions}
-        </select>
-        <select class="form-select schedule-room">
-            ${roomOptions}
-        </select>
-        <button type="button" class="btn btn-outline-danger" onclick="removeScheduleRow(this)"><i class="fas fa-times"></i></button>
-    `;
-    
-    form.insertBefore(newRow, btnContainer);
-}
-
-function saveSchedule(destId) {
-    const form = document.getElementById(`form-schedule-${destId}`);
-    const rows = form.querySelectorAll('.schedule-row');
-    let scheduleData = [];
-    let hoursCheck = []; 
-
-    for (let row of rows) {
-        const hour = row.querySelector('.schedule-hour').value;
-        const room = row.querySelector('.schedule-room').value;
-
-        if (hoursCheck.includes(hour)) {
-            showToast(`Attention : L'horaire de ${hour}h est en double !`, 'error');
-            return; 
-        }
-        hoursCheck.push(hour);
-
-        scheduleData.push({ hour: hour, room_id: room });
-    }
-
-    fetch('api/update_schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipient_id: destId, schedule: scheduleData })
-    })
-    .then(res => res.json())
-    .then(res => {
-        if(res.success) {
-            // 1. On affiche le toast de succès
-            showToast("Horaires enregistrés avec succès !");
-
-            // 2. On rafraîchit la modale
-            // (Cela remet automatiquement la vue en mode "lecture")
-            const orderId = document.getElementById('modal-order-id').innerText;
-            showOrderDetails(parseInt(orderId));
-            
-            // J'ai SUPPRIMÉ la ligne 'toggleEditMode' qui causait le bug
-        } else {
-            showToast("Erreur : " + res.error, 'error');
-        }
-    })
-    .catch(err => {
-        console.error(err); // Affiche la vraie erreur dans la console (F12) au cas où
-        alert("Erreur technique (voir console)");
     });
 }
 </script>
