@@ -29,7 +29,7 @@ if (isset($_COOKIE['jwt'])) {
         $is_logged_in = true;
         $_SESSION['user_id'] = $current_user_id;
 
-        $stmt = $pdo->prepare("SELECT * FROM project_users WHERE user_id = ?");
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
         $stmt->execute([$current_user_id]);
         $user_info = $stmt->fetch();
         
