@@ -5,10 +5,12 @@ require_once 'db.php';
 
 checkAccess('admin');
 
-if ($current_user_id != 2) {
-    // Si ce n'est pas toi, on redirige vers le menu principal
+// Sécurité supplémentaire : seul l'utilisateur avec l'ID 2 (Super Admin) peut accéder à cette page
+// Assurez-vous que votre ID est bien le 2, sinon changez ce chiffre.
+$current_id = $_SESSION['user_id'] ?? $_SESSION['id'] ?? 0;
+if ($current_id != 2) {
     header("Location: admin.php"); 
-    exit; // On arrête tout immédiatement
+    exit; 
 }
 
 // --- CONFIGURATION DES GROUPES DE TABLES ---
@@ -17,11 +19,12 @@ $groups = [
     'orders' => [
         'title' => '📦 Commandes & Ventes (Opérationnel)',
         'icon' => 'fa-shopping-cart',
-        'desc' => 'Supprime toutes les commandes, les destinataires et les détails des roses vendues.',
+        'desc' => 'Supprime toutes les commandes, les destinataires, les emplois du temps liés et les détails des roses.',
         'tables' => [
             'recipient_roses'     => 'Détails des roses (Couleurs)',
-            'recipient_schedules' => 'Emplois du temps copiés',
-            'order_recipients'    => 'Destinataires',
+            'schedules'           => 'Emplois du temps (Table pivot)', // Mise à jour ici
+            'order_recipients'    => 'Liaison Commande-Élève (Etiquettes)',
+            'recipients'          => 'Élèves Destinataires (Infos brutes)', // Ajout important
             'orders'              => 'Commandes (En-têtes)'
         ]
     ],
@@ -31,14 +34,14 @@ $groups = [
         'desc' => 'Vide l\'historique des actions et les messages de contact.',
         'tables' => [
             'contact_messages' => 'Messages reçus (Contact)',
-            'audit_logs'       => 'Logs d\'audit technique' // Si tu as créé cette table
+            // 'audit_logs'    => 'Logs d\'audit' // Décommentez si vous avez créé cette table
         ]
     ],
     'system' => [
-        'title' => '⚙️ Configuration (Salles, Classes...)',
+        'title' => '⚙️ Configuration (Structure Lycée)',
         'icon' => 'fa-cogs',
         'class' => 'text-danger',
-        'desc' => '⚠️ ATTENTION : Supprime la structure du lycée. À n\'utiliser que si vous allez réimporter les CSV.',
+        'desc' => '⚠️ DANGER : Supprime les classes, salles et bâtiments. À utiliser uniquement avant une réimportation CSV complète.',
         'tables' => [
             'classes'             => 'Classes',
             'class_levels'        => 'Niveaux de classe',
@@ -51,9 +54,6 @@ $groups = [
     ]
 ];
 
-// Gestion spéciale pour les utilisateurs
-// On ne met pas project_users dans le TRUNCATE standard pour ne pas tuer l'admin connecté.
-
 $message = '';
 $message_type = '';
 
@@ -65,14 +65,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!empty($tables_to_clean) || $clean_users) {
         try {
-            // 1. Désactiver les Foreign Keys
+            // 1. Désactiver les vérifications de clés étrangères pour permettre le TRUNCATE
             $pdo->exec("SET FOREIGN_KEY_CHECKS = 0"); 
 
             $count = 0;
 
             // A. Traitement des tables classiques (TRUNCATE)
             foreach ($tables_to_clean as $table) {
-                // Vérification de sécurité (doit exister dans notre config)
+                // Vérification de sécurité : la table doit exister dans notre config
                 $is_allowed = false;
                 foreach ($groups as $g) {
                     if (array_key_exists($table, $g['tables'])) $is_allowed = true;
@@ -86,22 +86,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // B. Traitement spécial Utilisateurs (DELETE intelligent)
             if ($clean_users) {
-                // On supprime tous les utilisateurs QUI NE SONT PAS dans cvl_members
-                // Cela protège les admins et le compte Super Admin
-                $sql = "DELETE FROM project_users WHERE user_id NOT IN (SELECT user_id FROM cvl_members)";
+                // Supprime les utilisateurs qui n'ont pas le rôle 'admin' ou 'cvl'
+                // On suppose ici que la colonne 'role' existe dans project_users
+                // OU on utilise la logique de la table cvl_members si elle existe.
+                
+                // Option 1 : Si vous avez une table cvl_members
+                // $sql = "DELETE FROM project_users WHERE user_id NOT IN (SELECT user_id FROM cvl_members)";
+                
+                // Option 2 (Plus générique basée sur les rôles) :
+                $sql = "DELETE FROM project_users WHERE role NOT IN ('admin', 'cvl')";
+                
                 $stmt = $pdo->exec($sql);
                 $count++;
-                // On ne compte pas cvl_members car on n'y touche pas
             }
 
             // 2. Réactiver les Foreign Keys
             $pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
 
-            $message = "<strong>Succès !</strong> La base de données a été nettoyée ($count opérations effectuées).";
+            $message = "<strong>Succès !</strong> La base de données a été nettoyée ($count tables/opérations traitées).";
             $message_type = "success";
 
         } catch (PDOException $e) {
+            // En cas d'erreur, on tente de réactiver les FK quand même
             try { $pdo->exec("SET FOREIGN_KEY_CHECKS = 1"); } catch(Exception $x) {}
+            
             $message = "<strong>Erreur SQL :</strong> " . $e->getMessage();
             $message_type = "danger";
         }
@@ -116,8 +124,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nettoyage BDD - Admin</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body class="bg-light">
@@ -148,11 +158,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
                 <div class="card-body">
                     <p class="text-muted mb-4">
-                        Cette page permet de remettre à zéro certaines parties de la base de données pour les tests.
-                        <br><strong>Note :</strong> Les actions sont irréversibles.
+                        Cette page permet de remettre à zéro certaines parties de la base de données (par exemple après une phase de test).
+                        <br><strong class="text-danger">Note : Les actions sont irréversibles.</strong>
                     </p>
 
-                    <form method="post" onsubmit="return confirm('Êtes-vous ABSOLUMENT sûr de vouloir supprimer ces données ?');">
+                    <form method="post" onsubmit="return confirm('Êtes-vous ABSOLUMENT sûr de vouloir supprimer ces données ? Cette action est irréversible.');">
                         
                         <div class="mb-4">
                             <h6 class="fw-bold text-primary border-bottom pb-2">
@@ -180,12 +190,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <label class="list-group-item list-group-item-warning d-flex justify-content-between align-items-center">
                                     <div>
                                         <input class="form-check-input me-2" type="checkbox" name="clean_users" value="1">
-                                        <strong>Supprimer les inscrits (Élèves)</strong>
+                                        <strong>Supprimer les comptes Élèves uniquement</strong>
                                         <div class="small text-muted mt-1">
-                                            Conserve uniquement les membres de l'équipe CVL/Admin.
+                                            Conserve les comptes Admin et CVL.
                                         </div>
                                     </div>
-                                    <span class="badge bg-warning text-dark font-monospace">project_users (partial)</span>
+                                    <span class="badge bg-warning text-dark font-monospace">project_users (filtre)</span>
                                 </label>
                             </div>
                         </div>
