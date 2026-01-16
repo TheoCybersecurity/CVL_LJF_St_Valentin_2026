@@ -113,10 +113,12 @@ foreach ($statsColors as $c) { $totalRosesVendues += $c['count']; }
 // 5. TOP CLASSES ACHETEUSES
 // ==========================================
 try {
+    // Top Classes Acheteuses
     $sqlClasses = "
         SELECT c.name, COUNT(o.id) as count, SUM(o.total_price) as total
         FROM orders o
-        JOIN classes c ON o.buyer_class_id = c.id
+        JOIN users u ON o.user_id = u.user_id       -- On lie la commande à l'utilisateur
+        JOIN classes c ON u.class_id = c.id         -- On lie l'utilisateur à sa classe
         WHERE o.is_paid = 1
         GROUP BY c.id
         ORDER BY count DESC LIMIT 5
