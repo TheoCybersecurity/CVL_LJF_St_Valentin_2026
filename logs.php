@@ -11,7 +11,7 @@ $view = $_GET['view'] ?? 'global'; // 'global' ou 'timeline'
 
 if ($view === 'global') {
     // VUE 1 : Tableau récapitulatif
-    // Ici j'avais bien mis user_id, c'est pour ça que ça marchait peut-être avant
+    // (Cette partie était déjà presque correcte, je l'ai gardée propre)
     $sql = "
         SELECT 
             o.id as order_id, o.created_at, 
@@ -40,7 +40,9 @@ if ($view === 'global') {
 
 } else {
     // VUE 2 : Timeline Chronologique COMPLÈTE
-    // CORRECTION : Remplacement de u.id par u.user_id partout
+    // CORRECTIONS :
+    // 1. Ajout JOIN users pour la création de commande
+    // 2. Remplacement de 'project_users' par 'users'
     
     $sql = "
         /* 1. CRÉATION DE COMMANDE */
@@ -48,9 +50,11 @@ if ($view === 'global') {
             o.created_at as event_date, 
             'creation' as type, 
             CONCAT('Commande #', o.id, ' créée') as description,
-            CONCAT(o.buyer_prenom, ' ', o.buyer_nom) as actor,
+            CONCAT(u.prenom, ' ', u.nom) as actor,  -- CORRIGÉ ICI
             o.id as ref_id
-         FROM orders o)
+         FROM orders o
+         JOIN users u ON o.user_id = u.user_id      -- AJOUT JOINTURE ICI
+        )
          
         UNION
         
@@ -62,7 +66,7 @@ if ($view === 'global') {
             IF(u.user_id IS NOT NULL, CONCAT(u.prenom, ' ', u.nom), CONCAT('Admin ID: ', o.paid_by_cvl_id)) as actor, 
             o.id as ref_id
          FROM orders o
-         LEFT JOIN project_users u ON o.paid_by_cvl_id = u.user_id
+         LEFT JOIN users u ON o.paid_by_cvl_id = u.user_id -- CORRECTION TABLE users
          WHERE o.is_paid = 1)
 
         UNION
@@ -89,7 +93,7 @@ if ($view === 'global') {
             ort.order_id as ref_id
          FROM order_recipients ort
          JOIN recipients r ON ort.recipient_id = r.id
-         LEFT JOIN project_users u ON ort.distributed_by_cvl_id = u.user_id
+         LEFT JOIN users u ON ort.distributed_by_cvl_id = u.user_id -- CORRECTION TABLE users
          WHERE ort.is_distributed = 1)
         
         ORDER BY event_date DESC
