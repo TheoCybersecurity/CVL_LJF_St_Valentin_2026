@@ -74,7 +74,7 @@ try {
     $pdo = $pdo_local; 
 
     // On récupère class_id
-    $stmtLocal = $pdo_local->prepare("SELECT nom, prenom, class_id FROM project_users WHERE user_id = ?");
+    $stmtLocal = $pdo_local->prepare("SELECT nom, prenom, class_id FROM users WHERE user_id = ?");
     $stmtLocal->execute([$current_user_id]);
     $localUser = $stmtLocal->fetch(PDO::FETCH_ASSOC);
 
