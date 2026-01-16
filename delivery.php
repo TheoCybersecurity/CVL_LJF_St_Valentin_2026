@@ -60,7 +60,7 @@ $params = [];
 $sql = "";
 
 if ($searchQuery) {
-    // --- MODE RECHERCHE (inchangé) ---
+    // --- MODE RECHERCHE (CORRIGÉ) ---
     $sql = "
         SELECT 
             ort.id as unique_gift_id, ort.is_anonymous, ort.message_id, ort.distributed_at,
@@ -68,16 +68,17 @@ if ($searchQuery) {
             c.name as class_name,
             pm.content as message_content,
             'Recherche' as room_name, 'Résultats' as floor_name, '' as building_name,
-            o.buyer_prenom, o.buyer_nom
+            u.prenom as buyer_prenom, u.nom as buyer_nom
         FROM order_recipients ort
         JOIN recipients r ON ort.recipient_id = r.id
         JOIN orders o ON ort.order_id = o.id
+        JOIN users u ON o.user_id = u.user_id  -- AJOUT JOINTURE USERS
         LEFT JOIN classes c ON r.class_id = c.id
         LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
         WHERE o.is_paid = 1 
         AND (
             r.nom LIKE :q OR r.prenom LIKE :q OR CONCAT(r.prenom, ' ', r.nom) LIKE :q OR
-            o.buyer_nom LIKE :q OR o.buyer_prenom LIKE :q
+            u.nom LIKE :q OR u.prenom LIKE :q -- CORRECTION RECHERCHE SUR USERS
         )
     ";
     
@@ -90,8 +91,7 @@ if ($searchQuery) {
     $params['q'] = "%$searchQuery%";
 
 } else {
-    // --- MODE STANDARD (Par Salle/Heure) ---
-    // ICI : Changement majeur pour utiliser la colonne hXX
+    // --- MODE STANDARD (Par Salle/Heure) (CORRIGÉ) ---
     
     $sql = "
         SELECT 
@@ -107,10 +107,11 @@ if ($searchQuery) {
             f.name as floor_name,
             f.level_number,
             b.name as building_name,
-            o.buyer_prenom, o.buyer_nom
+            u.prenom as buyer_prenom, u.nom as buyer_nom
         FROM order_recipients ort
         JOIN recipients r ON ort.recipient_id = r.id
         JOIN orders o ON ort.order_id = o.id
+        JOIN users u ON o.user_id = u.user_id  -- AJOUT JOINTURE USERS
         LEFT JOIN classes c ON r.class_id = c.id
         LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
         
