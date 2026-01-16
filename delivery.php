@@ -4,26 +4,22 @@ require_once 'db.php';
 require_once 'auth_check.php'; 
 checkAccess('cvl');
 
-// --- 1. TRAITEMENT DES ACTIONS ---
+// --- 1. TRAITEMENT DES ACTIONS (inchangé) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    
     $id = 0;
-    if (isset($_POST['recipient_id'])) $id = intval($_POST['recipient_id']);
-    elseif (isset($_POST['recipient_ids'])) $id = intval($_POST['recipient_ids']);
+    if (isset($_POST['gift_id'])) $id = intval($_POST['gift_id']); 
+    elseif (isset($_POST['recipient_id'])) $id = intval($_POST['recipient_id']); 
 
     if ($id > 0) {
         $actionType = '';
-        // Récupération de l'ID du membre CVL connecté
-        $adminId = $_SESSION['user_id'] ?? null;
+        $adminId = $_SESSION['user_id'] ?? ($_SESSION['id'] ?? null);
 
-        if ((isset($_POST['action']) && $_POST['action'] === 'mark_distributed') || isset($_POST['mark_prepared'])) {
-            // AJOUT : On enregistre aussi distributed_by_cvl_id
+        if ((isset($_POST['action']) && $_POST['action'] === 'mark_distributed')) {
             $stmt = $pdo->prepare("UPDATE order_recipients SET is_distributed = 1, distributed_at = NOW(), distributed_by_cvl_id = ? WHERE id = ?");
             $stmt->execute([$adminId, $id]);
             $actionType = 'marked';
         }
-        elseif (isset($_POST['unmark_prepared'])) {
-            // AJOUT : On remet distributed_by_cvl_id à NULL
+        elseif (isset($_POST['unmark_distributed'])) {
             $stmt = $pdo->prepare("UPDATE order_recipients SET is_distributed = 0, distributed_at = NULL, distributed_by_cvl_id = NULL WHERE id = ?");
             $stmt->execute([$id]);
             $actionType = 'unmarked';
@@ -42,9 +38,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // --- 2. GESTION DES FILTRES ---
 $buildings = $pdo->query("SELECT id, name FROM buildings ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 
+// Gestion de l'heure courante et de la colonne correspondante
 $currentHour = intval(date('H'));
 if ($currentHour < 8 || $currentHour > 17) $currentHour = 8;
-$selectedHour = isset($_GET['hour']) ? $_GET['hour'] : $currentHour; 
+$selectedHour = isset($_GET['hour']) ? intval($_GET['hour']) : $currentHour;
+
+// Sécurité : on s'assure que l'heure est entre 8 et 17
+if ($selectedHour < 8 || $selectedHour > 17) $selectedHour = 8;
+
+// Construction du nom de la colonne (ex: h08, h09, h10...)
+$hourColumn = 'h' . str_pad($selectedHour, 2, '0', STR_PAD_LEFT);
 
 $defaultBuildingId = count($buildings) > 0 ? $buildings[0]['id'] : 0;
 $selectedBuilding = isset($_GET['building']) ? $_GET['building'] : $defaultBuildingId;
@@ -52,83 +55,90 @@ $selectedBuilding = isset($_GET['building']) ? $_GET['building'] : $defaultBuild
 $searchQuery = isset($_GET['q']) ? trim($_GET['q']) : '';
 $view = isset($_GET['view']) ? $_GET['view'] : 'todo';
 
-// --- 3. REQUÊTE SQL ---
+// --- 3. REQUÊTE SQL ADAPTÉE À LA TABLE schedules ---
 $params = [];
 $sql = "";
 
 if ($searchQuery) {
-    // --- MODE RECHERCHE ---
+    // --- MODE RECHERCHE (inchangé) ---
     $sql = "
         SELECT 
-            r.id as recipient_id, r.dest_nom, r.dest_prenom, r.is_anonymous, r.message_id, r.distributed_at,
+            ort.id as unique_gift_id, ort.is_anonymous, ort.message_id, ort.distributed_at,
+            r.nom as dest_nom, r.prenom as dest_prenom,
             c.name as class_name,
             pm.content as message_content,
-            'Recherche' as room_name, 
-            'Résultats' as floor_name, 
-            '' as building_name,
+            'Recherche' as room_name, 'Résultats' as floor_name, '' as building_name,
             o.buyer_prenom, o.buyer_nom
-        FROM order_recipients r
-        JOIN orders o ON r.order_id = o.id
+        FROM order_recipients ort
+        JOIN recipients r ON ort.recipient_id = r.id
+        JOIN orders o ON ort.order_id = o.id
         LEFT JOIN classes c ON r.class_id = c.id
-        LEFT JOIN predefined_messages pm ON r.message_id = pm.id
+        LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
         WHERE o.is_paid = 1 
         AND (
-            r.dest_nom LIKE :q OR 
-            r.dest_prenom LIKE :q OR 
-            CONCAT(r.dest_prenom, ' ', r.dest_nom) LIKE :q OR
-            o.buyer_nom LIKE :q OR
-            o.buyer_prenom LIKE :q
+            r.nom LIKE :q OR r.prenom LIKE :q OR CONCAT(r.prenom, ' ', r.nom) LIKE :q OR
+            o.buyer_nom LIKE :q OR o.buyer_prenom LIKE :q
         )
     ";
     
     if ($view === 'done') {
-        $sql .= " AND r.is_distributed = 1 ORDER BY r.distributed_at DESC ";
+        $sql .= " AND ort.is_distributed = 1 ORDER BY ort.distributed_at DESC ";
     } else {
-        $sql .= " AND r.is_distributed = 0 ";
+        $sql .= " AND ort.is_distributed = 0 ";
     }
     $sql .= " LIMIT 50";
     $params['q'] = "%$searchQuery%";
 
 } else {
-    // --- MODE STANDARD ---
+    // --- MODE STANDARD (Par Salle/Heure) ---
+    // ICI : Changement majeur pour utiliser la colonne hXX
+    
     $sql = "
         SELECT 
-            r.id as recipient_id, r.dest_nom, r.dest_prenom, r.is_anonymous, r.message_id, r.distributed_at,
+            ort.id as unique_gift_id, ort.is_anonymous, ort.message_id, ort.distributed_at,
+            r.nom as dest_nom, r.prenom as dest_prenom,
             c.name as class_name,
             pm.content as message_content,
-            rs.room_id, 
-            rm.name as room_name,
+            
+            -- On récupère le nom de la salle depuis la colonne dynamique (ex: s.h08)
+            s.$hourColumn as room_name,
+            
+            rm.id as room_id,
             f.name as floor_name,
             f.level_number,
             b.name as building_name,
             o.buyer_prenom, o.buyer_nom
-        FROM order_recipients r
-        JOIN orders o ON r.order_id = o.id
+        FROM order_recipients ort
+        JOIN recipients r ON ort.recipient_id = r.id
+        JOIN orders o ON ort.order_id = o.id
         LEFT JOIN classes c ON r.class_id = c.id
-        LEFT JOIN predefined_messages pm ON r.message_id = pm.id
-        JOIN recipient_schedules rs ON (r.id = rs.recipient_id) 
-        JOIN rooms rm ON rs.room_id = rm.id
+        LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
+        
+        -- Jointure avec la table schedules (s)
+        JOIN schedules s ON r.id = s.recipient_id
+        
+        -- Jointure avec rooms (rm) en utilisant le CONTENU de la colonne heure (nom de salle)
+        -- On utilise un INNER JOIN pour ne garder que ceux qui ont une salle valide à cette heure
+        JOIN rooms rm ON s.$hourColumn = rm.name
+        
         JOIN floors f ON rm.floor_id = f.id
         JOIN buildings b ON rm.building_id = b.id
+        
         WHERE o.is_paid = 1 
+        -- On s'assure que la colonne de l'heure n'est pas vide
+        AND s.$hourColumn IS NOT NULL AND s.$hourColumn != ''
     ";
 
-    if ($selectedHour !== 'all') {
-        $sql .= " AND rs.hour_slot = :hour ";
-        $params['hour'] = $selectedHour;
-    } else {
-        $sql .= " AND rs.hour_slot IS NOT NULL ";
-    }
-
+    // Filtre par Bâtiment
     if ($selectedBuilding !== 'all') {
         $sql .= " AND rm.building_id = :building ";
         $params['building'] = $selectedBuilding;
     }
 
     if ($view === 'done') {
-        $sql .= " AND r.is_distributed = 1 ORDER BY r.distributed_at DESC ";
+        $sql .= " AND ort.is_distributed = 1 ORDER BY ort.distributed_at DESC ";
     } else {
-        $sql .= " AND r.is_distributed = 0 ORDER BY b.name ASC, f.level_number ASC, rm.name ASC, r.dest_nom ASC ";
+        $sql .= " AND ort.is_distributed = 0 ORDER BY b.name ASC, f.level_number ASC, rm.name ASC, r.nom ASC ";
     }
 }
 
@@ -136,19 +146,25 @@ $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $recipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// --- 4. CHARGEMENT DES ROSES ---
-$recipientIds = array_column($recipients, 'recipient_id');
+// --- 4. CHARGEMENT DES ROSES (inchangé) ---
+$giftIds = array_column($recipients, 'unique_gift_id');
 $rosesMap = [];
-if (!empty($recipientIds)) {
-    $inQuery = implode(',', array_fill(0, count($recipientIds), '?'));
-    $stmtRoses = $pdo->prepare("SELECT rr.recipient_id, rr.quantity, rp.name FROM recipient_roses rr JOIN rose_products rp ON rr.rose_product_id = rp.id WHERE rr.recipient_id IN ($inQuery)");
-    $stmtRoses->execute($recipientIds);
+
+if (!empty($giftIds)) {
+    $inQuery = implode(',', array_fill(0, count($giftIds), '?'));
+    $stmtRoses = $pdo->prepare("
+        SELECT rr.recipient_id as gift_ref_id, rr.quantity, rp.name 
+        FROM recipient_roses rr 
+        JOIN rose_products rp ON rr.rose_product_id = rp.id 
+        WHERE rr.recipient_id IN ($inQuery)
+    ");
+    $stmtRoses->execute($giftIds);
     while ($row = $stmtRoses->fetch(PDO::FETCH_ASSOC)) {
-        $rosesMap[$row['recipient_id']][] = $row;
+        $rosesMap[$row['gift_ref_id']][] = $row;
     }
 }
 
-// --- 5. REGROUPEMENT ---
+// --- 5. REGROUPEMENT (inchangé) ---
 $groupedData = [];
 if ($searchQuery) {
     $groupedData['Résultats']['🔍 Recherche'] = $recipients;
@@ -200,7 +216,6 @@ if ($searchQuery) {
         .recipient-item.done { background-color: #f8fff9; opacity: 0.8; }
         .recipient-item:last-child { border-bottom: none; }
         
-        /* --- NOUVEAUX STYLES POUR LES BADGES ROSES --- */
         .badge-rose-rouge { background-color: #dc3545; color: white; }
         .badge-rose-blanche { background-color: #ffffff; color: #212529; border: 1px solid #ced4da; }
         .badge-rose-pink { background-color: #ffc2d1; color: #880e4f; }
@@ -222,14 +237,14 @@ if ($searchQuery) {
             <?php if($view === 'todo'): ?>
                 <p class="text-muted">
                     <?php if(!empty($searchQuery)): ?>
-                        Résultats de recherche : <strong><?php echo count($recipients); ?></strong> destinataire(s) trouvé(s).
+                        Résultats : <strong><?php echo count($recipients); ?></strong> trouvé(s).
                     <?php else: ?>
-                        Reste à livrer : <strong><?php echo count($recipients); ?></strong> destinataire(s).
+                        À livrer à <strong><?php echo $selectedHour; ?>h</strong> : <strong><?php echo count($recipients); ?></strong>.
                     <?php endif; ?>
                 </p>
             <?php else: ?>
                 <p class="text-muted">
-                    Historique : <strong><?php echo count($recipients); ?></strong> livraison(s) effectuée(s).
+                    Historique : <strong><?php echo count($recipients); ?></strong> livraison(s).
                 </p>
             <?php endif; ?>
         </div>
@@ -259,7 +274,7 @@ if ($searchQuery) {
                 <input type="text" 
                        name="q" 
                        class="form-control rounded-start-pill border-end-0 ps-3 bg-white" 
-                       placeholder="Chercher (Nom, Acheteur...)" 
+                       placeholder="Chercher (Nom...)" 
                        value="<?php echo htmlspecialchars($searchQuery); ?>">
                 
                 <?php if($searchQuery): ?>
@@ -298,13 +313,8 @@ if ($searchQuery) {
         </div>
 
         <div class="mb-3">
-            <label class="small text-muted fw-bold ms-1">🕒 HEURE</label>
+            <label class="small text-muted fw-bold ms-1">🕒 HEURE (Cours actuel)</label>
             <div class="scrolling-wrapper">
-                <a href="?building=<?php echo $selectedBuilding; ?>&hour=all&view=<?php echo $view; ?>" 
-                   class="time-btn <?php echo ($selectedHour === 'all') ? 'active' : ''; ?>">
-                   Tout
-                </a>
-
                 <?php for($h=8; $h<=17; $h++): ?>
                     <a href="?building=<?php echo $selectedBuilding; ?>&hour=<?php echo $h; ?>&view=<?php echo $view; ?>" 
                        class="time-btn <?php echo ($selectedHour == $h) ? 'active' : ''; ?>">
@@ -318,8 +328,11 @@ if ($searchQuery) {
     <?php if(empty($groupedData)): ?>
         <div class="text-center py-5">
             <h5 class="text-muted">
-                <?php echo ($view === 'todo') ? 'Aucune livraison à faire avec ces filtres.' : 'Aucune livraison terminée.'; ?>
+                <?php echo ($view === 'todo') ? 'Aucune livraison à faire dans ce bâtiment à cette heure.' : 'Aucune livraison terminée.'; ?>
             </h5>
+            <?php if($view === 'todo' && !$searchQuery): ?>
+                <p class="small text-muted">Vérifiez l'heure sélectionnée (<?php echo $selectedHour; ?>h).</p>
+            <?php endif; ?>
         </div>
     <?php else: ?>
         <?php foreach($groupedData as $floorName => $roomsInFloor): ?>
@@ -350,7 +363,7 @@ if ($searchQuery) {
                                     </div>
                                     
                                     <form method="POST">
-                                        <input type="hidden" name="recipient_id" value="<?php echo $dest['recipient_id']; ?>">
+                                        <input type="hidden" name="gift_id" value="<?php echo $dest['unique_gift_id']; ?>">
                                         
                                         <?php if($view === 'todo'): ?>
                                             <input type="hidden" name="action" value="mark_distributed">
@@ -358,7 +371,7 @@ if ($searchQuery) {
                                                 <i class="fas fa-check"></i>
                                             </button>
                                         <?php else: ?>
-                                            <input type="hidden" name="unmark_prepared" value="1">
+                                            <input type="hidden" name="unmark_distributed" value="1">
                                             <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-3 py-2 shadow-sm" onclick="return confirm('Annuler cette livraison ?')">
                                                 <i class="fas fa-undo"></i>
                                             </button>
@@ -367,11 +380,10 @@ if ($searchQuery) {
                                 </div>
                                 
                                 <div class="mb-2">
-                                    <?php if(isset($rosesMap[$dest['recipient_id']])): ?>
-                                        <?php foreach($rosesMap[$dest['recipient_id']] as $rose): ?>
+                                    <?php if(isset($rosesMap[$dest['unique_gift_id']])): ?>
+                                        <?php foreach($rosesMap[$dest['unique_gift_id']] as $rose): ?>
                                             
                                             <?php
-                                                // Logique de couleur
                                                 $colorName = mb_strtolower($rose['name']);
                                                 $badgeClass = "bg-secondary text-white"; 
                                                 $emoji = "🌹";
@@ -406,11 +418,11 @@ if ($searchQuery) {
                                     <?php endif; ?>
 
                                     <?php if($dest['message_content']): ?>
-                                        <button class="btn btn-sm btn-light border py-0 px-2 small text-primary" type="button" data-bs-toggle="collapse" data-bs-target="#m<?php echo $dest['recipient_id']; ?>">Msg</button>
+                                        <button class="btn btn-sm btn-light border py-0 px-2 small text-primary" type="button" data-bs-toggle="collapse" data-bs-target="#m<?php echo $dest['unique_gift_id']; ?>">Msg</button>
                                     <?php endif; ?>
                                 </div>
                                 <?php if($dest['message_content']): ?>
-                                    <div class="collapse mt-2" id="m<?php echo $dest['recipient_id']; ?>">
+                                    <div class="collapse mt-2" id="m<?php echo $dest['unique_gift_id']; ?>">
                                         <div class="bg-light p-2 rounded small border-start border-4 border-primary">"<?php echo htmlspecialchars($dest['message_content']); ?>"</div>
                                     </div>
                                 <?php endif; ?>
