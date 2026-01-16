@@ -10,18 +10,18 @@ if (strlen($term) < 2) {
     exit;
 }
 
-// ON FAIT UNE JOINTURE (LEFT JOIN) pour récupérer le nom de la classe via l'ID
+// Recherche simple sur la table identité
 $stmt = $pdo->prepare("
     SELECT 
-        rs.id, 
-        rs.nom, 
-        rs.prenom, 
-        rs.class_id, 
+        r.id, 
+        r.nom, 
+        r.prenom, 
+        r.class_id, 
         c.name as class_name 
-    FROM recipient_schedules rs
-    LEFT JOIN classes c ON rs.class_id = c.id
-    WHERE rs.nom LIKE :t OR rs.prenom LIKE :t 
-    ORDER BY rs.nom ASC, rs.prenom ASC 
+    FROM recipients r
+    LEFT JOIN classes c ON r.class_id = c.id
+    WHERE r.nom LIKE :t OR r.prenom LIKE :t 
+    ORDER BY r.nom ASC, r.prenom ASC 
     LIMIT 15
 ");
 
