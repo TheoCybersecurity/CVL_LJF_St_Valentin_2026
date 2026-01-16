@@ -11,16 +11,15 @@ $view = $_GET['view'] ?? 'global'; // 'global' ou 'timeline'
 
 if ($view === 'global') {
     // VUE 1 : Tableau récapitulatif
+    // Ici j'avais bien mis user_id, c'est pour ça que ça marchait peut-être avant
     $sql = "
         SELECT 
             o.id as order_id, o.created_at, o.buyer_nom, o.buyer_prenom,
             o.is_paid, o.paid_at, o.paid_by_cvl_id,
             
-            -- Récupération info livreur
             (SELECT COUNT(*) FROM order_recipients WHERE order_id = o.id) as nb_dest,
             (SELECT COUNT(*) FROM order_recipients WHERE order_id = o.id AND is_distributed=1) as nb_distrib,
             
-            -- Jointure pour avoir le nom de l'encaisseur
             u_pay.prenom as pay_admin_prenom,
             u_pay.nom as pay_admin_nom
             
@@ -33,8 +32,10 @@ if ($view === 'global') {
 
 } else {
     // VUE 2 : Timeline Chronologique COMPLÈTE
-    // On combine : Création, Paiement, Préparation, Distribution
+    // CORRECTION : Remplacement de u.id par u.user_id partout
+    
     $sql = "
+        /* 1. CRÉATION DE COMMANDE */
         (SELECT 
             o.created_at as event_date, 
             'creation' as type, 
@@ -45,6 +46,7 @@ if ($view === 'global') {
          
         UNION
         
+        /* 2. PAIEMENT */
         (SELECT 
             o.paid_at as event_date, 
             'payment' as type, 
@@ -57,26 +59,30 @@ if ($view === 'global') {
 
         UNION
 
+        /* 3. PRÉPARATION */
         (SELECT 
-            r.prepared_at as event_date, 
+            ort.prepared_at as event_date, 
             'preparation' as type, 
-            CONCAT('Préparation rose pour ', r.dest_prenom, ' ', r.dest_nom) as description,
-            'Staff / CVL' as actor, -- Pas de colonne ID pour la prépa, on met une valeur par défaut
-            r.order_id as ref_id
-         FROM order_recipients r
-         WHERE r.is_prepared = 1)
+            CONCAT('Préparation rose pour ', r.prenom, ' ', r.nom) as description,
+            'Staff / CVL' as actor, 
+            ort.order_id as ref_id
+         FROM order_recipients ort
+         JOIN recipients r ON ort.recipient_id = r.id
+         WHERE ort.is_prepared = 1)
          
         UNION
         
+        /* 4. DISTRIBUTION */
         (SELECT 
-            r.distributed_at as event_date, 
+            ort.distributed_at as event_date, 
             'distribution' as type, 
-            CONCAT('Livré à ', r.dest_prenom, ' ', r.dest_nom) as description,
-            IF(u.user_id IS NOT NULL, CONCAT(u.prenom, ' ', u.nom), CONCAT('Admin ID: ', r.distributed_by_cvl_id)) as actor,
-            r.order_id as ref_id
-         FROM order_recipients r
-         LEFT JOIN project_users u ON r.distributed_by_cvl_id = u.user_id
-         WHERE r.is_distributed = 1)
+            CONCAT('Livré à ', r.prenom, ' ', r.nom) as description,
+            IF(u.user_id IS NOT NULL, CONCAT(u.prenom, ' ', u.nom), CONCAT('Admin ID: ', ort.distributed_by_cvl_id)) as actor,
+            ort.order_id as ref_id
+         FROM order_recipients ort
+         JOIN recipients r ON ort.recipient_id = r.id
+         LEFT JOIN project_users u ON ort.distributed_by_cvl_id = u.user_id
+         WHERE ort.is_distributed = 1)
         
         ORDER BY event_date DESC
         LIMIT 200
@@ -93,8 +99,10 @@ if ($view === 'global') {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Logs & Audit</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
+        body { background-color: #f4f6f9; }
         .timeline-icon { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 50%; color: white; font-size: 1.1rem; }
         /* Couleurs des étapes */
         .bg-creation { background-color: #0d6efd; } /* Bleu */
@@ -103,15 +111,14 @@ if ($view === 'global') {
         .bg-distribution { background-color: #dc3545; } /* Rouge/Rose */
     </style>
 </head>
-<body class="bg-light">
+<body>
 
 <?php include 'navbar.php'; ?>
 
 <div class="container mt-4 mb-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <a href="admin.php" class="text-decoration-none text-muted"><i class="fas fa-arrow-left"></i> Retour Hub</a>
-            <h2 class="fw-bold mt-2">📜 Journal des Opérations</h2>
+            <h2 class="fw-bold mt-2"><i class="fas fa-clipboard-list"></i> Journal des Opérations</h2>
         </div>
         <div class="btn-group">
             <a href="?view=global" class="btn <?php echo $view === 'global' ? 'btn-dark' : 'btn-outline-dark'; ?>">Vue Globale</a>
