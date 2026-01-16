@@ -14,7 +14,10 @@ if ($view === 'global') {
     // Ici j'avais bien mis user_id, c'est pour ça que ça marchait peut-être avant
     $sql = "
         SELECT 
-            o.id as order_id, o.created_at, o.buyer_nom, o.buyer_prenom,
+            o.id as order_id, o.created_at, 
+            -- On récupère les infos de l'acheteur via la table users
+            u_buyer.nom as buyer_nom, u_buyer.prenom as buyer_prenom,
+            
             o.is_paid, o.paid_at, o.paid_by_cvl_id,
             
             (SELECT COUNT(*) FROM order_recipients WHERE order_id = o.id) as nb_dest,
@@ -24,7 +27,12 @@ if ($view === 'global') {
             u_pay.nom as pay_admin_nom
             
         FROM orders o
-        LEFT JOIN project_users u_pay ON o.paid_by_cvl_id = u_pay.user_id
+        -- JOINTURE OBLIGATOIRE POUR L'ACHETEUR
+        JOIN users u_buyer ON o.user_id = u_buyer.user_id
+        
+        -- JOINTURE POUR L'ADMIN ENCAISSEUR
+        LEFT JOIN users u_pay ON o.paid_by_cvl_id = u_pay.user_id
+        
         ORDER BY o.created_at DESC
         LIMIT 100
     ";
