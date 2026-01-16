@@ -94,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // $sql = "DELETE FROM project_users WHERE user_id NOT IN (SELECT user_id FROM cvl_members)";
                 
                 // Option 2 (Plus générique basée sur les rôles) :
-                $sql = "DELETE FROM project_users WHERE role NOT IN ('admin', 'cvl')";
+                $sql = "DELETE FROM users WHERE role NOT IN ('admin', 'cvl')";
                 
                 $stmt = $pdo->exec($sql);
                 $count++;
