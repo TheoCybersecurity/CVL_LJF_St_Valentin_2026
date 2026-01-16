@@ -58,17 +58,17 @@ if ($nav_user_id) {
             <?php if ($nav_role): ?>
                 <li class="nav-item dropdown nav-item-cvl">
                     <a class="nav-link dropdown-toggle btn btn-outline-light ms-lg-2 px-3 border-0" href="#" role="button" data-bs-toggle="dropdown" data-bs-display="static">
-                        <i class="fas fa-users-cog me-1 text-warning"></i> Espace CVL
+                        <i class="fas fa-users-cog me-1 text-danger"></i> Espace CVL
                     </a>
                     <ul class="dropdown-menu dropdown-menu-end shadow border-0">
                         <li>
                             <a class="dropdown-item" href="manage_orders.php">
-                                <i class="fas fa-clipboard-list me-2 text-secondary"></i> Gestion Commandes
+                                <i class="fas fa-clipboard-list me-2 text-primary"></i> Gestion Commandes
                             </a>
                         </li>
                         <li>
                             <a class="dropdown-item" href="preparation.php">
-                                <i class="fas fa-boxes me-2 text-primary"></i> Mode Préparation
+                                <i class="fas fa-boxes me-2 text-warning"></i> Mode Préparation
                             </a>
                         </li>
                         <li>
