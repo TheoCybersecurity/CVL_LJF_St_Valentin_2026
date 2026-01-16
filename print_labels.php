@@ -8,51 +8,64 @@ checkAccess('cvl');
 // Fonction pour nettoyer les émojis et caractères non supportés par FPDF
 function cleanText($text) {
     // Convertir en Windows-1252 (standard FPDF) et supprimer ce qui ne passe pas
-    return iconv('UTF-8', 'windows-1252//TRANSLIT', $text);
+    // Si iconv échoue, on retourne le texte brut (ou vide) pour éviter une erreur fatale
+    $converted = @iconv('UTF-8', 'windows-1252//TRANSLIT', $text);
+    return $converted ?: ''; 
 }
 
 // --- 1. RÉCUPÉRATION DES DONNÉES ---
 $levelFilter = isset($_GET['level']) ? $_GET['level'] : 'all';
 
+// Alias utilisés :
+// ort = order_recipients (Le "colis" / L'étiquette)
+// r   = recipients (L'élève destinataire)
+// o   = orders
+// c   = classes
+// cl  = class_levels
+
 $sql = "
     SELECT 
-        r.id as recipient_id, 
-        r.dest_nom, r.dest_prenom, r.is_anonymous, 
+        ort.id as unique_gift_id,  -- L'ID unique de l'étiquette
+        r.nom as dest_nom, 
+        r.prenom as dest_prenom, 
+        ort.is_anonymous, 
         pm.content as message_content,
         c.name as class_name,
-        cl.group_alias, -- Ajout de l'alias
+        cl.group_alias, 
         o.buyer_prenom, o.buyer_nom
-    FROM order_recipients r
-    JOIN orders o ON r.order_id = o.id
+    FROM order_recipients ort
+    JOIN recipients r ON ort.recipient_id = r.id
+    JOIN orders o ON ort.order_id = o.id
     LEFT JOIN classes c ON r.class_id = c.id
-    LEFT JOIN class_levels cl ON c.level_id = cl.id -- Jointure
-    LEFT JOIN predefined_messages pm ON r.message_id = pm.id
+    LEFT JOIN class_levels cl ON c.level_id = cl.id
+    LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
     WHERE o.is_paid = 1 
-    AND r.is_prepared = 0 
+    AND ort.is_prepared = 0 
 ";
 
-// Filtrage simplifié grâce à la base de données
+// Filtrage
+$params = [];
 if ($levelFilter !== 'all') {
-    // Sécurisation basique même si c'est une requête préparée
     $allowedFilters = ['2nde', '1ere', 'term', 'autre'];
     if (in_array($levelFilter, $allowedFilters)) {
         $sql .= " AND cl.group_alias = :filter ";
+        $params['filter'] = $levelFilter;
     }
 }
 
-$sql .= " ORDER BY c.name ASC, r.dest_nom ASC";
+// Tri par Classe puis par Nom
+$sql .= " ORDER BY c.name ASC, r.nom ASC";
 
 $stmt = $pdo->prepare($sql);
-
-if ($levelFilter !== 'all' && in_array($levelFilter, $allowedFilters)) {
-    $stmt->execute(['filter' => $levelFilter]);
-} else {
-    $stmt->execute();
-}
-
+$stmt->execute($params);
 $labels = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // --- 2. CONFIGURATION PDF ---
+// Si aucune étiquette, on évite de générer un PDF vide qui ferait erreur
+if (count($labels) === 0) {
+    die("Aucune étiquette à imprimer pour le filtre sélectionné.");
+}
+
 $pdf = new FPDF('P', 'mm', 'A4');
 $pdf->SetAutoPageBreak(false); // Important : on gère les sauts de page manuellement
 $pdf->AddPage();
@@ -82,11 +95,11 @@ foreach ($labels as $label) {
     
     // -- CONTENU DE L'ÉTIQUETTE --
     
-    // 1. ID (Haut Droite)
+    // 1. ID (Haut Droite) -> Utilisation de unique_gift_id
     $pdf->SetXY($currentX, $currentY + 1); // Petit décalage interne
     $pdf->SetFont('Arial', 'B', 8);
     $pdf->SetTextColor(150);
-    $pdf->Cell($colWidth - 2, 4, '#' . $label['recipient_id'], 0, 1, 'R');
+    $pdf->Cell($colWidth - 2, 4, '#' . $label['unique_gift_id'], 0, 1, 'R');
     
     // 2. Destinataire (Gras)
     $pdf->SetXY($currentX + 1, $currentY + 5);
