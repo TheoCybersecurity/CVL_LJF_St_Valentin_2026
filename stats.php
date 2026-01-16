@@ -4,6 +4,7 @@ session_start();
 require_once 'db.php';
 require_once 'auth_check.php';
 
+// Vérification de connexion (Redondant avec auth_check mais sécurité supplémentaire)
 if (!isset($_SESSION['user_id'])) {
     header("Location: index.php");
     exit();
@@ -29,6 +30,7 @@ $percentPaid = ($totalOrders > 0) ? round(($nbPaid / $totalOrders) * 100) : 0;
 // On ne compte QUE les destinataires liés à des COMMANDES PAYÉES
 try {
     // Total des paquets à faire (Commandes payées uniquement)
+    // Alias : orc = order_recipients
     $sqlTotal = "SELECT COUNT(orc.id) FROM order_recipients orc 
                  JOIN orders o ON orc.order_id = o.id 
                  WHERE o.is_paid = 1";
@@ -59,7 +61,7 @@ try {
 // 3. STATS "FUN" (Anonymat & Stars)
 // ==========================================
 try {
-    // Taux d'anonymat (Correction ici : is_anonymous)
+    // Taux d'anonymat
     $sqlAnon = "SELECT COUNT(orc.id) FROM order_recipients orc 
                 JOIN orders o ON orc.order_id = o.id 
                 WHERE orc.is_anonymous = 1 AND o.is_paid = 1";
@@ -67,13 +69,14 @@ try {
     
     $percentAnon = ($totalPaquets > 0) ? round(($nbAnon / $totalPaquets) * 100) : 0;
 
-    // Top 3 des Stars (Correction de la requête)
-    // On groupe par Nom ET Prénom pour éviter les doublons homonymes
-    $sqlStars = "SELECT orc.dest_prenom, orc.dest_nom, COUNT(orc.id) as count 
+    // Top 3 des Stars (CORRIGÉ : Jointure avec recipients)
+    // On groupe par l'ID de l'élève pour éviter les homonymes, mais on affiche son nom
+    $sqlStars = "SELECT r.prenom, r.nom, COUNT(orc.id) as count 
                  FROM order_recipients orc
                  JOIN orders o ON orc.order_id = o.id
+                 JOIN recipients r ON orc.recipient_id = r.id
                  WHERE o.is_paid = 1
-                 GROUP BY orc.dest_nom, orc.dest_prenom 
+                 GROUP BY r.id 
                  ORDER BY count DESC 
                  LIMIT 3";
     $topStars = $pdo->query($sqlStars)->fetchAll(PDO::FETCH_ASSOC);
@@ -87,8 +90,8 @@ try {
 // ==========================================
 $statsColors = [];
 try {
-    // Note : Si cette requête échoue encore, c'est peut-être le nom 'rose_product_id'
-    // Vérifie ta table recipient_roses avec un DESCRIBE si besoin.
+    // rr = recipient_roses
+    // On suppose que rr.recipient_id pointe vers order_recipients.id
     $sqlColors = "
         SELECT p.name, SUM(rr.quantity) as count
         FROM recipient_roses rr
@@ -130,6 +133,7 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Statistiques Détaillées - St Valentin</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         .card-stat-mini { transition: transform 0.2s; }
@@ -219,7 +223,7 @@ try {
                     <ul class="list-unstyled mb-0">
                         <?php $rank=1; foreach($topStars as $star): ?>
                         <li class="d-flex justify-content-between align-items-center mb-2 bg-white bg-opacity-25 rounded p-2">
-                            <span class="fw-bold">#<?php echo $rank; ?> <?php echo htmlspecialchars($star['dest_prenom'] . ' ' . substr($star['dest_nom'], 0, 1) . '.'); ?></span>
+                            <span class="fw-bold">#<?php echo $rank; ?> <?php echo htmlspecialchars($star['prenom'] . ' ' . substr($star['nom'], 0, 1) . '.'); ?></span>
                             <span class="badge bg-white text-dark"><?php echo $star['count']; ?> 🌹</span>
                         </li>
                         <?php $rank++; endforeach; ?>
@@ -286,18 +290,20 @@ try {
                     <h5 class="fw-bold m-0 text-primary"><i class="fas fa-users me-2"></i>Meilleures Classes (Acheteurs)</h5>
                 </div>
                 <div class="card-body p-0">
-                    <table class="table table-hover align-middle mb-0">
-                        <thead class="table-light"><tr><th class="ps-4">#</th><th>Classe</th><th class="text-end pe-4">Commandes</th></tr></thead>
-                        <tbody>
-                            <?php $rank = 1; foreach($topClasses as $tc): ?>
-                            <tr>
-                                <td class="ps-4 fw-bold text-muted"><?php echo $rank; ?></td>
-                                <td class="fw-bold"><?php echo htmlspecialchars($tc['name']); ?></td>
-                                <td class="text-end pe-4"><span class="badge bg-primary rounded-pill"><?php echo $tc['count']; ?></span></td>
-                            </tr>
-                            <?php $rank++; endforeach; ?>
-                        </tbody>
-                    </table>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light"><tr><th class="ps-4">#</th><th>Classe</th><th class="text-end pe-4">Commandes</th></tr></thead>
+                            <tbody>
+                                <?php $rank = 1; foreach($topClasses as $tc): ?>
+                                <tr>
+                                    <td class="ps-4 fw-bold text-muted"><?php echo $rank; ?></td>
+                                    <td class="fw-bold"><?php echo htmlspecialchars($tc['name']); ?></td>
+                                    <td class="text-end pe-4"><span class="badge bg-primary rounded-pill"><?php echo $tc['count']; ?></span></td>
+                                </tr>
+                                <?php $rank++; endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
