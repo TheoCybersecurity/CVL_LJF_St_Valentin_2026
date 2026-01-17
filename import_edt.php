@@ -17,6 +17,7 @@ require_once 'auth_check.php';
         .step-active { border-left-color: #0d6efd; box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important; }
         .file-list-container { max-height: 300px; overflow-y: auto; background-color: #f8f9fa; }
         .toast-container-custom { position: fixed; bottom: 20px; right: 20px; z-index: 1055; }
+        .error-log-container { background: #fff3cd; border: 1px solid #ffeeba; border-radius: 5px; padding: 15px; margin-top: 20px; display: none; }
     </style>
 </head>
 <body class="bg-light">
@@ -30,18 +31,17 @@ require_once 'auth_check.php';
     
     <div class="mb-4 text-center">
         <h2 class="fw-bold">Importation des Données</h2>
-        <p class="text-muted">Procédure en 2 étapes pour éviter les erreurs serveur.</p>
+        <p class="text-muted">Procédure optimisée avec rapport final.</p>
     </div>
 
     <div class="card shadow-sm mb-4 step-card step-active" id="cardCsv">
         <div class="card-header bg-white py-3">
-            <h5 class="mb-0 fw-bold text-primary"><i class="fas fa-users me-2"></i>ÉTAPE 1 : Base de données Élèves (CSV)</h5>
+            <h5 class="mb-0 fw-bold text-primary"><i class="fas fa-users me-2"></i>ÉTAPE 1 : Base Élèves (CSV)</h5>
         </div>
         <div class="card-body">
-            <p>Importez le fichier <code>nom_prenom_classe.csv</code> pour créer ou mettre à jour la liste des élèves.</p>
             <div class="row align-items-end">
                 <div class="col-md-8">
-                    <label class="form-label">Fichier CSV (séparateur point-virgule)</label>
+                    <label class="form-label">Fichier CSV (3 colonnes : Nom ; Prénom ; Classe)</label>
                     <input type="file" class="form-control" id="csvInput" accept=".csv">
                 </div>
                 <div class="col-md-4">
@@ -53,19 +53,16 @@ require_once 'auth_check.php';
         </div>
     </div>
 
-    <hr class="my-5">
-
     <div class="card shadow-sm step-card" id="cardIcs">
         <div class="card-header bg-white py-3">
             <h5 class="mb-0 fw-bold text-success"><i class="fas fa-calendar-alt me-2"></i>ÉTAPE 2 : Emplois du temps (ICS)</h5>
         </div>
         <div class="card-body">
-            <p>Ajoutez les fichiers <code>.ics</code>. Le système mettra à jour les horaires des élèves importés à l'étape 1.</p>
             
             <div class="row g-4">
                 <div class="col-md-5">
                     <div class="border rounded p-3 bg-white h-100">
-                        <label class="form-label fw-bold">1. Sélectionner & Envoyer</label>
+                        <label class="form-label fw-bold">1. Envoyer sur le serveur</label>
                         <input class="form-control mb-3" type="file" id="icsInput" multiple accept=".ics">
                         
                         <div class="progress mb-3 d-none" id="uploadProgressWrapper" style="height: 15px;">
@@ -73,7 +70,7 @@ require_once 'auth_check.php';
                         </div>
 
                         <button onclick="uploadFilesBatch()" class="btn btn-success w-100" id="btnUploadIcs">
-                            <i class="fas fa-cloud-upload-alt me-2"></i>Envoyer (Batch)
+                            <i class="fas fa-cloud-upload-alt me-2"></i>Envoyer
                         </button>
                     </div>
                 </div>
@@ -81,10 +78,15 @@ require_once 'auth_check.php';
                 <div class="col-md-7">
                     <div class="border rounded p-3 bg-white h-100">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <label class="form-label fw-bold mb-0">2. Liste d'attente serveur</label>
-                            <button onclick="startIntegration()" class="btn btn-outline-success btn-sm" id="btnProcess" disabled>
-                                <i class="fas fa-play me-1"></i>Lancer traitement
-                            </button>
+                            <label class="form-label fw-bold mb-0">2. Traitement</label>
+                            <div>
+                                <button onclick="manualCleanup()" class="btn btn-sm btn-danger me-2">
+                                    <i class="fas fa-trash-alt me-1"></i>Vider cache
+                                </button>
+                                <button onclick="startIntegration()" class="btn btn-outline-success btn-sm" id="btnProcess" disabled>
+                                    <i class="fas fa-play me-1"></i>Lancer
+                                </button>
+                            </div>
                         </div>
                         
                         <div class="progress mb-2 d-none" id="processProgressWrapper" style="height: 10px;">
@@ -97,9 +99,60 @@ require_once 'auth_check.php';
                     </div>
                 </div>
             </div>
+
+            <div id="errorReport" class="error-log-container">
+                <h5 class="text-danger fw-bold"><i class="fas fa-exclamation-triangle me-2"></i>Erreurs / Échecs</h5>
+                <ul class="list-group list-group-flush small" id="errorLogList"></ul>
+            </div>
+
         </div>
     </div>
 
+</div>
+
+<div class="modal fade" id="modalReport" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="fas fa-check-circle me-2"></i>Traitement terminé</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <h4 class="fw-bold mb-4">Rapport d'importation</h4>
+                
+                <div class="row g-2">
+                    <div class="col-4">
+                        <div class="p-3 border rounded bg-light">
+                            <div class="h2 text-success fw-bold" id="countInserted">0</div>
+                            <small class="text-uppercase fw-bold text-muted">Insérés</small>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="p-3 border rounded bg-light">
+                            <div class="h2 text-warning fw-bold" id="countUpdated">0</div>
+                            <small class="text-uppercase fw-bold text-muted">Modifiés</small>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="p-3 border rounded bg-light">
+                            <div class="h2 text-secondary fw-bold" id="countUnchanged">0</div>
+                            <small class="text-uppercase fw-bold text-muted">Identiques</small>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-4 pt-3 border-top">
+                    <div class="d-flex justify-content-between text-muted small px-4">
+                        <span>Ignorés (PAEN) : <strong id="countSkipped">0</strong></span>
+                        <span>Erreurs : <strong id="countErrors" class="text-danger">0</strong></span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary w-100" data-bs-dismiss="modal">Fermer</button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -137,7 +190,6 @@ require_once 'auth_check.php';
             const res = await req.json();
             if (res.status === 'success') {
                 showToast(res.message, "success");
-                // Active visuellement l'étape 2
                 document.getElementById('cardCsv').classList.remove('step-active');
                 document.getElementById('cardIcs').classList.add('step-active');
             } else {
@@ -151,7 +203,7 @@ require_once 'auth_check.php';
         btn.innerHTML = '<i class="fas fa-file-csv me-2"></i>Importer les élèves';
     }
 
-    // --- ETAPE 2 : UPLOAD BATCH (ICS) ---
+    // --- ETAPE 2 : UPLOAD BATCH ---
     async function uploadFilesBatch() {
         const input = document.getElementById('icsInput');
         const files = input.files;
@@ -176,7 +228,7 @@ require_once 'auth_check.php';
 
             try {
                 const req = await fetch('backend_import', { method: 'POST', body: fd });
-                if (req.ok) success += chunk.length; // On assume succès si HTTP 200
+                if (req.ok) success += chunk.length;
             } catch(e) { console.error(e); }
 
             uploaded += chunk.length;
@@ -190,7 +242,17 @@ require_once 'auth_check.php';
         fetchFileList();
     }
 
-    // --- ETAPE 2 : LISTING ---
+    // --- CLEANUP ---
+    async function manualCleanup() {
+        if(!confirm("Supprimer TOUS les fichiers du dossier temporaire ?")) return;
+        const fd = new FormData(); fd.append('action', 'cleanup');
+        const res = await fetch('backend_import', { method: 'POST', body: fd });
+        const data = await res.json();
+        showToast(`${data.count} fichiers supprimés.`, 'success');
+        fetchFileList();
+    }
+
+    // --- LISTING ---
     let currentFiles = [];
     async function fetchFileList() {
         const fd = new FormData(); fd.append('action', 'list');
@@ -198,6 +260,9 @@ require_once 'auth_check.php';
         const data = await res.json();
         currentFiles = data.files || [];
         renderList();
+        
+        document.getElementById('errorReport').style.display = 'none';
+        document.getElementById('errorLogList').innerHTML = '';
     }
 
     function renderList() {
@@ -206,7 +271,7 @@ require_once 'auth_check.php';
         container.innerHTML = '';
         
         if (currentFiles.length === 0) {
-            container.innerHTML = '<li class="list-group-item text-center text-muted small py-3">Aucun fichier.</li>';
+            container.innerHTML = '<li class="list-group-item text-center text-muted small py-3">Aucun fichier en attente.</li>';
             btnProc.disabled = true;
             return;
         }
@@ -215,23 +280,32 @@ require_once 'auth_check.php';
         currentFiles.forEach((f, idx) => {
             container.insertAdjacentHTML('beforeend', `
                 <li class="list-group-item d-flex justify-content-between align-items-center p-2" id="row-${idx}">
-                    <div class="small text-truncate" style="max-width: 70%;">${f.student}</div>
+                    <div class="small text-truncate" style="max-width: 70%;" title="${f.filename}">
+                        <i class="far fa-file-alt me-2 text-muted"></i>${f.student}
+                    </div>
                     <span class="badge bg-secondary" id="badge-${idx}">Attente</span>
                 </li>
             `);
         });
     }
 
-    // --- ETAPE 2 : TRAITEMENT ---
+    // --- TRAITEMENT & RAPPORT ---
     async function startIntegration() {
         const btn = document.getElementById('btnProcess');
         const pWrapper = document.getElementById('processProgressWrapper');
         const pBar = document.getElementById('processProgressBar');
+        const errorReport = document.getElementById('errorReport');
+        const errorList = document.getElementById('errorLogList');
         
         btn.disabled = true;
         pWrapper.classList.remove('d-none');
+        errorReport.style.display = 'none';
+        errorList.innerHTML = '';
         
+        // COMPTEURS RAPPORT
+        let stats = { inserted: 0, updated: 0, unchanged: 0, skipped: 0, errors: 0 };
         let count = 0;
+
         for (let i = 0; i < currentFiles.length; i++) {
             const f = currentFiles[i];
             const badge = document.getElementById(`badge-${i}`);
@@ -240,18 +314,36 @@ require_once 'auth_check.php';
             const fd = new FormData();
             fd.append('action', 'process');
             fd.append('filename', f.filename);
-            // Pas d'overwrite nécessaire car on fait des UPDATES sur les élèves CSV
             
             try {
                 const req = await fetch('backend_import', { method: 'POST', body: fd });
                 const res = await req.json();
-                if(res.status === 'success') {
-                    badge.className = 'badge bg-success'; badge.innerText = 'OK';
+                
+                if (res.status === 'inserted') {
+                    badge.className = 'badge bg-success'; badge.innerText = 'Ajouté';
+                    stats.inserted++;
+                } else if (res.status === 'updated') {
+                    badge.className = 'badge bg-warning text-dark'; badge.innerText = 'Modifié';
+                    stats.updated++;
+                } else if (res.status === 'unchanged') {
+                    badge.className = 'badge bg-info text-dark'; badge.innerText = 'Identique';
+                    stats.unchanged++;
+                } else if (res.status === 'skipped') {
+                    badge.className = 'badge bg-secondary'; badge.innerText = 'Ignoré';
+                    stats.skipped++;
                 } else {
-                    badge.className = 'badge bg-danger'; badge.innerText = 'ERR';
+                    // ERROR
+                    badge.className = 'badge bg-danger'; badge.innerText = 'Erreur';
+                    stats.errors++;
+                    errorList.insertAdjacentHTML('beforeend', `
+                        <li class="list-group-item list-group-item-danger">
+                            <strong>${f.filename}</strong> : ${res.message}
+                        </li>
+                    `);
                 }
             } catch(e) {
-                badge.className = 'badge bg-danger'; badge.innerText = 'ERR';
+                badge.className = 'badge bg-danger'; badge.innerText = 'Crash';
+                stats.errors++;
             }
 
             count++;
@@ -259,11 +351,22 @@ require_once 'auth_check.php';
             document.getElementById(`row-${i}`).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
         
-        showToast("Intégration terminée.", "success");
-        setTimeout(() => {
-            pWrapper.classList.add('d-none');
-            fetchFileList(); // Devrait être vide
-        }, 2000);
+        pWrapper.classList.add('d-none');
+        
+        if (stats.errors > 0) errorReport.style.display = 'block';
+
+        // AFFICHAGE MODAL
+        document.getElementById('countInserted').innerText = stats.inserted;
+        document.getElementById('countUpdated').innerText = stats.updated;
+        document.getElementById('countUnchanged').innerText = stats.unchanged;
+        document.getElementById('countSkipped').innerText = stats.skipped;
+        document.getElementById('countErrors').innerText = stats.errors;
+
+        const reportModal = new bootstrap.Modal(document.getElementById('modalReport'));
+        reportModal.show();
+
+        // Rafraichir liste si nécessaire (pour enlever ceux qui sont faits)
+        // On ne le fait pas tout de suite pour laisser l'utilisateur voir les badges
     }
     
     // Init

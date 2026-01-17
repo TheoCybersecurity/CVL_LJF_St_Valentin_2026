@@ -14,6 +14,7 @@ set_error_handler("jsonErrorHandler");
 
 try {
     require_once 'db.php'; 
+    $pdo->exec("SET time_zone = '+01:00'"); 
 } catch (Exception $e) {
     echo json_encode(['status' => 'error', 'message' => "Erreur DB: " . $e->getMessage()]);
     exit;
@@ -24,14 +25,15 @@ if (!is_dir($uploadDir)) @mkdir($uploadDir, 0777, true);
 
 $action = $_POST['action'] ?? '';
 
-// --- HELPER : UTF8 ---
+// --- HELPERS ---
 function forceUtf8($str) {
     return mb_convert_encoding($str, 'UTF-8', 'auto');
 }
 
-// --- HELPER : GESTION DES CLASSES ---
 function getClassId($pdo, $className) {
     if (empty($className)) return null;
+    if (in_array(strtoupper($className), ['PAEN3', 'PAEN4'])) return 'EXCLUDED';
+
     $stmt = $pdo->prepare("SELECT id FROM classes WHERE name = ?");
     $stmt->execute([$className]);
     $res = $stmt->fetch();
@@ -42,38 +44,21 @@ function getClassId($pdo, $className) {
     return $pdo->lastInsertId();
 }
 
-// --- HELPER : GESTION DES SALLES ---
 function getRoomId($pdo, $roomName) {
     if (empty($roomName) || $roomName === '?') return null;
-
     $roomName = trim($roomName);
     $cleanName = $roomName;
 
-    // 1. EXCEPTIONS NOMS LONGS
-    if (stripos($roomName, 'NSI-SNT-GT') !== false) {
+    if (stripos($roomName, 'NSI-SNT-GT') !== false || stripos($roomName, 'Salle Info') !== false) {
         $cleanName = 'Salle Info NSI-SNT';
-    } 
-    elseif (stripos($roomName, 'Salle Info') !== false) {
-        $cleanName = 'Salle Info NSI-SNT';
-    }
-    else {
-        // 2. NETTOYAGE STANDARD
-        if (preg_match('/^([A-Z0-9]+)/', $roomName, $matches)) {
-            $cleanName = $matches[1];
-        }
-
-        // 3. EXCEPTIONS CODES COURTS
-        $shortCodeAliases = [
-            'G8' => 'G08',
-            'G9' => 'G09',
-        ];
-
-        if (isset($shortCodeAliases[$cleanName])) {
-            $cleanName = $shortCodeAliases[$cleanName];
-        }
+    } elseif (stripos($roomName, 'Stage') !== false) {
+        $cleanName = 'Stage';
+    } else {
+        if (preg_match('/^([A-Z0-9]+)/', $roomName, $matches)) $cleanName = $matches[1];
+        $shortCodeAliases = ['G8' => 'G08', 'G9' => 'G09'];
+        if (isset($shortCodeAliases[$cleanName])) $cleanName = $shortCodeAliases[$cleanName];
     }
 
-    // 4. RECHERCHE BDD
     $stmt = $pdo->prepare("SELECT id FROM rooms WHERE name = ?");
     $stmt->execute([$cleanName]);
     $res = $stmt->fetch();
@@ -82,27 +67,44 @@ function getRoomId($pdo, $roomName) {
         return $res['id'];
     } else {
         try {
-            // Création par défaut (Bat 1, Etage 1)
             $stmtIns = $pdo->prepare("INSERT INTO rooms (name, building_id, floor_id) VALUES (?, 1, 1)"); 
             $stmtIns->execute([$cleanName]);
             return $pdo->lastInsertId();
-        } catch (Exception $e) {
-            return null;
-        }
+        } catch (Exception $e) { return null; }
     }
 }
 
-// --- HELPER : PARSING NOM FICHIER ---
-function parseFilenameInfo($filename) {
+function parseFilenameDisplay($filename) {
+    $temp = str_replace('.ics', '', $filename);
+    if (strpos($temp, 'Calendrier_') === 0) $temp = substr($temp, 11);
+    $temp = preg_replace('/_\d{8}$/', '', $temp); 
+    return str_replace('_', ' ', $temp);
+}
+
+function findRecipientIdFromFilename($pdo, $filename) {
     $temp = str_replace('.ics', '', $filename);
     if (strpos($temp, 'Calendrier_') === 0) $temp = substr($temp, 11);
     $temp = preg_replace('/_\d{8}$/', '', $temp); 
     
-    $parts = explode('_', $temp);
-    $prenom = array_pop($parts);
-    $nom = implode(' ', $parts);
+    // Correctifs spécifiques
+    if (stripos($temp, 'PENEVERE') !== false && stripos($temp, 'Elior') !== false) {
+        $temp = str_replace('Elior', 'Eleanor', $temp);
+    }
+    if (stripos($temp, 'RISEROLE') !== false && stripos($temp, 'PONS') === false) {
+        $temp = str_replace('RISEROLE', 'PONS-RISEROLE', $temp);
+    }
     
-    return ['nom' => trim($nom), 'prenom' => trim($prenom)];
+    $flatFilename = strtoupper(str_replace(['_', ' ', '-'], '', $temp));
+
+    $sql = "SELECT id FROM recipients 
+            WHERE REPLACE(REPLACE(REPLACE(CONCAT(nom, prenom), ' ', ''), '-', ''), '_', '') = :flatName
+            OR REPLACE(REPLACE(REPLACE(CONCAT(prenom, nom), ' ', ''), '-', ''), '_', '') = :flatName";
+            
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':flatName' => $flatFilename]);
+    $res = $stmt->fetch();
+
+    return $res ? $res['id'] : null;
 }
 
 // =========================================================
@@ -114,27 +116,28 @@ if ($action === 'import_csv') {
         $handle = fopen($_FILES['csv_file']['tmp_name'], "r");
         if ($handle === false) throw new Exception('Erreur lecture CSV.');
 
-        $added = 0; $updated = 0;
+        $added = 0; $updated = 0; $excluded = 0;
         $pdo->beginTransaction();
 
         while (($data = fgetcsv($handle, 1000, ";")) !== FALSE) {
-            // On s'attend à 3 colonnes minimum
             if (count($data) < 3) continue;
             
-            // LECTURE STRICTE : Colonne 0 = Nom, Colonne 1 = Prénom, Colonne 2 = Classe
-            // On applique juste trim() et UTF8, aucune conversion de majuscule/minuscule.
             $nom = trim(forceUtf8($data[0]));
             $prenom = trim(forceUtf8($data[1]));
             $className = trim(forceUtf8($data[2]));
 
-            // Sauter la ligne d'entête (insensible à la casse)
             if (strtolower($nom) == 'nom' && strtolower($prenom) == 'prenom') continue;
-            
             if (empty($nom) || empty($prenom)) continue;
 
             $classId = getClassId($pdo, $className);
 
-            // Recherche exacte (sensible ou non selon la config SQL, généralement insensible)
+            if ($classId === 'EXCLUDED') {
+                $excluded++;
+                $del = $pdo->prepare("DELETE FROM recipients WHERE nom = ? AND prenom = ?");
+                $del->execute([$nom, $prenom]);
+                continue;
+            }
+
             $stmt = $pdo->prepare("SELECT id FROM recipients WHERE nom = ? AND prenom = ?");
             $stmt->execute([$nom, $prenom]);
             $row = $stmt->fetch();
@@ -151,7 +154,7 @@ if ($action === 'import_csv') {
         }
         $pdo->commit();
         fclose($handle);
-        echo json_encode(['status' => 'success', 'message' => "CSV : $added ajouts, $updated MAJ."]);
+        echo json_encode(['status' => 'success', 'message' => "CSV : $added ajouts, $updated MAJ, $excluded exclus."]);
 
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -184,8 +187,10 @@ if ($action === 'list') {
     $list = [];
     if ($files) {
         foreach ($files as $filePath) {
-            $info = parseFilenameInfo(basename($filePath));
-            $list[] = ['filename' => basename($filePath), 'student' => $info['nom'] . ' ' . $info['prenom']];
+            $list[] = [
+                'filename' => basename($filePath), 
+                'student' => parseFilenameDisplay(basename($filePath))
+            ];
         }
     }
     echo json_encode(['status' => 'success', 'files' => $list]);
@@ -193,38 +198,42 @@ if ($action === 'list') {
 }
 
 // =========================================================
-// 4. TRAITEMENT ICS
+// 4. TRAITEMENT ICS (AVEC COMPARAISON INTELLIGENTE)
 // =========================================================
 if ($action === 'process') {
     try {
         $fileName = $_POST['filename'];
         $filePath = $uploadDir . $fileName;
 
-        if (!file_exists($filePath)) throw new Exception('Fichier introuvable');
-
-        // 1. Infos Nom/Prénom
-        $info = parseFilenameInfo($fileName);
-        // MODIFICATION ICI : On ne force plus la majuscule, on garde le nom tel quel
-        $nom = $info['nom']; 
-        $prenom = $info['prenom'];
-
-        // 2. Chercher l'élève
-        $stmtCheck = $pdo->prepare("SELECT id FROM recipients WHERE nom = ? AND prenom = ?");
-        $stmtCheck->execute([$nom, $prenom]);
-        $recipient = $stmtCheck->fetch();
-        
-        $recipientId = null;
-        if ($recipient) {
-            $recipientId = $recipient['id'];
-        } else {
-            // Création élève si absent (ex: pas dans le CSV)
-            // On insère le nom tel qu'il vient du fichier ICS
-            $stmtIns = $pdo->prepare("INSERT INTO recipients (nom, prenom, class_id) VALUES (?, ?, NULL)");
-            $stmtIns->execute([$nom, $prenom]);
-            $recipientId = $pdo->lastInsertId();
+        if (!file_exists($filePath)) {
+            echo json_encode(['status' => 'error', 'message' => 'Fichier introuvable sur serveur']); exit;
         }
 
-        // 3. Parsing ICS
+        // --- PAEN EXCLUSION ---
+        $ignoredFiles = [
+            'Calendrier_AHMADOUN_Mohamed_04122007.ics', 'Calendrier_AHMED_Whabi_03032008.ics',
+            'Calendrier_BENCHEIK_Sarah_10072005.ics', 'Calendrier_BORJAS_Connor_24102006.ics'
+        ];
+        if (in_array($fileName, $ignoredFiles)) {
+             if (file_exists($filePath)) unlink($filePath);
+             echo json_encode(['status' => 'skipped', 'message' => 'PAEN (Normal)']); exit;
+        }
+
+        // 1. RECHERCHE
+        $recipientId = findRecipientIdFromFilename($pdo, $fileName);
+        if (!$recipientId) {
+            echo json_encode(['status' => 'error', 'message' => 'Élève introuvable (Base)']); exit;
+        }
+        
+        $stmtClass = $pdo->prepare("SELECT c.name FROM recipients r LEFT JOIN classes c ON r.class_id = c.id WHERE r.id = ?");
+        $stmtClass->execute([$recipientId]);
+        $classInfo = $stmtClass->fetchColumn();
+        if (in_array(strtoupper($classInfo), ['PAEN3', 'PAEN4'])) {
+             if (file_exists($filePath)) unlink($filePath);
+             echo json_encode(['status' => 'skipped', 'message' => 'Classe PAEN']); exit;
+        }
+
+        // 2. PARSING
         $content = file_get_contents($filePath);
         $heures = [];
         $events = explode('BEGIN:VEVENT', $content);
@@ -236,9 +245,7 @@ if ($action === 'process') {
             preg_match('/DTEND:(.*?)[\r\n]/', $block, $e);
             preg_match('/LOCATION;LANGUAGE=fr:(.*?)[\r\n]/', $block, $l);
 
-            $startStr = trim($s[1]??''); 
-            $endStr = trim($e[1]??''); 
-            $loc = trim($l[1]??'');
+            $startStr = trim($s[1]??''); $endStr = trim($e[1]??''); $loc = trim($l[1]??'');
 
             if ($startStr && $endStr) {
                 try {
@@ -249,54 +256,77 @@ if ($action === 'process') {
 
                     if ($start->format('Y-m-d') === '2026-02-13') {
                         $roomId = null;
-                        if (!empty($loc)) {
-                            $roomId = getRoomId($pdo, $loc);
-                        }
-                        
+                        if (!empty($loc)) $roomId = getRoomId($pdo, $loc);
                         $hStart = (int)$start->format('G');
                         $hEnd = (int)$end->format('G');
-                        for ($h=$hStart; $h<$hEnd; $h++) {
-                            if ($h>=8 && $h<=17) $heures[$h] = $roomId;
-                        }
+                        for ($h=$hStart; $h<$hEnd; $h++) if ($h>=8 && $h<=17) $heures[$h] = $roomId;
                     }
                 } catch (Exception $ex) {}
             }
         }
 
-        // 4. SQL
-        $stmtSched = $pdo->prepare("SELECT id FROM schedules WHERE recipient_id = ?");
-        $stmtSched->execute([$recipientId]);
-        $scheduleRow = $stmtSched->fetch();
-
-        $p = [
-            ':rid' => $recipientId,
-            ':h8'=>$heures[8]??null, ':h9'=>$heures[9]??null, ':h10'=>$heures[10]??null,
-            ':h11'=>$heures[11]??null, ':h12'=>$heures[12]??null, ':h13'=>$heures[13]??null,
-            ':h14'=>$heures[14]??null, ':h15'=>$heures[15]??null, ':h16'=>$heures[16]??null,
-            ':h17'=>$heures[17]??null
-        ];
-
-        if ($scheduleRow) {
-            $sql = "UPDATE schedules SET 
-                    h08=:h8, h09=:h9, h10=:h10, h11=:h11, h12=:h12, 
-                    h13=:h13, h14=:h14, h15=:h15, h16=:h16, h17=:h17 
-                    WHERE id = :id";
-            $p[':id'] = $scheduleRow['id'];
-            unset($p[':rid']);
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute($p);
-        } else {
-            $sql = "INSERT INTO schedules (recipient_id, h08, h09, h10, h11, h12, h13, h14, h15, h16, h17) 
-                    VALUES (:rid, :h8, :h9, :h10, :h11, :h12, :h13, :h14, :h15, :h16, :h17)";
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute($p);
+        // 3. STAGE
+        if (empty($heures)) {
+            $stageRoomId = getRoomId($pdo, 'Stage');
+            for ($h=8; $h<=17; $h++) $heures[$h] = $stageRoomId;
         }
 
+        // 4. SQL COMPARE & UPSERT
+        $stmtSched = $pdo->prepare("SELECT * FROM schedules WHERE recipient_id = ?");
+        $stmtSched->execute([$recipientId]);
+        $existing = $stmtSched->fetch(PDO::FETCH_ASSOC);
+
+        // Préparation des nouvelles valeurs pour comparaison
+        $newValues = [
+            'h08' => $heures[8] ?? null, 'h09' => $heures[9] ?? null, 'h10' => $heures[10] ?? null,
+            'h11' => $heures[11] ?? null, 'h12' => $heures[12] ?? null, 'h13' => $heures[13] ?? null,
+            'h14' => $heures[14] ?? null, 'h15' => $heures[15] ?? null, 'h16' => $heures[16] ?? null,
+            'h17' => $heures[17] ?? null
+        ];
+
+        $status = 'error';
+
+        if (!$existing) {
+            // INSERT
+            $sql = "INSERT INTO schedules (recipient_id, h08, h09, h10, h11, h12, h13, h14, h15, h16, h17) 
+                    VALUES (:rid, :h08, :h09, :h10, :h11, :h12, :h13, :h14, :h15, :h16, :h17)";
+            $params = array_merge([':rid' => $recipientId], $newValues);
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $status = 'inserted';
+        } else {
+            // COMPARE
+            $isDifferent = false;
+            foreach ($newValues as $key => $val) {
+                // On compare (attention aux types NULL vs string vide etc)
+                if ($existing[$key] != $val) {
+                    $isDifferent = true;
+                    break;
+                }
+            }
+
+            if ($isDifferent) {
+                // UPDATE
+                $sql = "UPDATE schedules SET 
+                        h08=:h08, h09=:h09, h10=:h10, h11=:h11, h12=:h12, 
+                        h13=:h13, h14=:h14, h15=:h15, h16=:h16, h17=:h17 
+                        WHERE id = :id";
+                $params = array_merge([':id' => $existing['id']], $newValues);
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                $status = 'updated';
+            } else {
+                // IGNORE
+                $status = 'unchanged';
+            }
+        }
+
+        // SUCCÈS : On supprime le fichier
         if (file_exists($filePath)) unlink($filePath);
-        echo json_encode(['status' => 'success']);
+        echo json_encode(['status' => $status]);
 
     } catch (Exception $e) {
-        echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        echo json_encode(['status' => 'error', 'message' => "Erreur : " . $e->getMessage()]);
     }
     exit;
 }
@@ -306,8 +336,16 @@ if ($action === 'process') {
 // =========================================================
 if ($action === 'cleanup') {
     $files = glob($uploadDir . '*.ics');
-    if ($files) foreach ($files as $f) if (is_file($f)) unlink($f);
-    echo json_encode(['status' => 'cleaned']);
+    $count = 0;
+    if ($files) {
+        foreach ($files as $f) {
+            if (is_file($f)) {
+                unlink($f);
+                $count++;
+            }
+        }
+    }
+    echo json_encode(['status' => 'cleaned', 'count' => $count]);
     exit;
 }
 ?>
