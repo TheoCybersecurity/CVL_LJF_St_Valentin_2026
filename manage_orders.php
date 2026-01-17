@@ -7,6 +7,7 @@ checkAccess('cvl');
 
 // --- 0. DONNÉES DE RÉFÉRENCE ---
 $allClasses = $pdo->query("SELECT id, name FROM classes ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
+// $allRooms est un tableau associatif : [ID => Nom de la salle]
 $allRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
 
 // Produits (Roses)
@@ -147,8 +148,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $stmtStudent->execute([$rData['nom'], $rData['prenom'], $destClass, $studentId]);
 
                     $isAnon = isset($rData['is_anonymous']) ? 1 : 0;
-                    
-                    // MODIFICATION ICI : Gestion du NULL pour le message_id
                     $messageIdToSave = !empty($rData['message_id']) ? $rData['message_id'] : NULL;
 
                     $stmtGift = $pdo->prepare("UPDATE order_recipients SET is_anonymous = ?, message_id = ? WHERE id = ?");
@@ -178,14 +177,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         }
                     }
 
+                    // MISE À JOUR DE L'EMPLOI DU TEMPS (MODIFIÉ)
                     if (isset($rData['schedule']) && is_array($rData['schedule'])) {
                         $schedUpdates = [];
                         $schedValues = [];
-                        foreach ($rData['schedule'] as $hour => $roomName) {
+                        
+                        // $roomId correspond à la value de l'<option>, donc l'ID
+                        foreach ($rData['schedule'] as $hour => $roomId) {
                             if ($hour >= 8 && $hour <= 17) {
                                 $colName = 'h' . str_pad($hour, 2, '0', STR_PAD_LEFT);
                                 $schedUpdates[] = "$colName = ?";
-                                $schedValues[] = $roomName;
+                                
+                                // On s'assure d'insérer NULL si vide, ou l'ID si présent
+                                $schedValues[] = !empty($roomId) ? $roomId : null;
                             }
                         }
                         if (!empty($schedUpdates)) {
@@ -313,15 +317,36 @@ foreach ($raw_results as $row) {
     $stmtRoses->execute([$row['order_recipient_id']]);
     $roses = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
 
+    // --- RÉCUPÉRATION ET DÉTECTION DU STAGE ---
     $stmtSchedule = $pdo->prepare("SELECT h08, h09, h10, h11, h12, h13, h14, h15, h16, h17 FROM schedules WHERE recipient_id = ?");
     $stmtSchedule->execute([$row['student_id']]);
     $schedRow = $stmtSchedule->fetch(PDO::FETCH_ASSOC);
 
     $scheduleMap = [];
+    $isStageAllDay = false; // Par défaut non
+
     if ($schedRow) {
-        foreach ($schedRow as $col => $roomName) {
+        // Vérification : est-ce que TOUTES les heures sont = 180 (Stage) ?
+        // On compte combien de créneaux (de 8h à 17h = 10 créneaux) sont à 180
+        $countStage = 0;
+        foreach ($schedRow as $col => $roomId) {
+            if ($roomId == 180) {
+                $countStage++;
+            }
+        }
+        // Si 10 créneaux sont "Stage", alors c'est la journée complète
+        if ($countStage === 10) {
+            $isStageAllDay = true;
+        }
+
+        // Remplissage classique pour l'affichage (conversion ID -> NOM)
+        foreach ($schedRow as $col => $roomId) {
             $hour = intval(substr($col, 1)); 
-            $scheduleMap[$hour] = $roomName;
+            if (!empty($roomId) && isset($allRooms[$roomId])) {
+                $scheduleMap[$hour] = $allRooms[$roomId];
+            } else {
+                $scheduleMap[$hour] = '';
+            }
         }
     }
 
@@ -338,7 +363,8 @@ foreach ($raw_results as $row) {
         'is_distributed' => $row['is_distributed'],
         'distributed_at' => $row['distributed_at'],
         'roses' => $roses,
-        'schedule_map' => $scheduleMap
+        'schedule_map' => $scheduleMap,
+        'is_stage_all_day' => $isStageAllDay // <--- NOUVELLE VARIABLE
     ];
 }
 ?>
@@ -578,15 +604,25 @@ foreach ($raw_results as $row) {
                                                 <strong class="small text-uppercase text-muted">📍 Localisation</strong>
                                                 <div class="mt-1">
                                                     <?php 
+                                                    // CAS 1 : STAGE TOUTE LA JOURNÉE
+                                                    if (isset($dest['is_stage_all_day']) && $dest['is_stage_all_day']) {
+                                                        // Modifs : text-wrap (autorise 2 lignes), text-start (aligne gauche), lh-sm (interligne fin)
+                                                        echo "<span class='badge bg-info text-dark text-wrap text-start lh-sm'><i class='fas fa-briefcase'></i> En stage (journée)</span>";
+                                                    } 
+                                                    // CAS 2 : AFFICHAGE CLASSIQUE
+                                                    else {
                                                         $hasSchedule = false;
-                                                        ksort($dest['schedule_map']);
-                                                        foreach($dest['schedule_map'] as $hour => $roomName) {
-                                                            if(!empty($roomName)) {
-                                                                echo "<div class='small mb-1'><span class='fw-bold'>{$hour}h</span> : ".htmlspecialchars($roomName)."</div>";
-                                                                $hasSchedule = true;
+                                                        if (isset($dest['schedule_map']) && is_array($dest['schedule_map'])) {
+                                                            ksort($dest['schedule_map']);
+                                                            foreach($dest['schedule_map'] as $hour => $roomName) {
+                                                                if(!empty($roomName)) {
+                                                                    echo "<div class='small mb-1'><span class='fw-bold'>{$hour}h</span> : ".htmlspecialchars($roomName)."</div>";
+                                                                    $hasSchedule = true;
+                                                                }
                                                             }
                                                         }
-                                                        if(!$hasSchedule) echo "<span class='text-danger small'>Pas de salle</span>";
+                                                        if(!$hasSchedule) echo "<span class='text-danger small'>Pas d'emploi du temps</span>";
+                                                    }
                                                     ?>
                                                 </div>
                                             </div>
