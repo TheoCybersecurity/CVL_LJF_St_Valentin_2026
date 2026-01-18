@@ -33,7 +33,6 @@ $groups = [
         'icon' => 'fa-file-alt',
         'desc' => 'Vide l\'historique des actions et les messages de contact.',
         'tables' => [
-            'contact_messages' => 'Messages reçus (Contact)',
             // 'audit_logs'    => 'Logs d\'audit' // Décommentez si vous avez créé cette table
         ]
     ],
