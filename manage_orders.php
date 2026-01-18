@@ -97,6 +97,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt = $pdo->prepare("UPDATE orders SET is_paid = 1, paid_at = NOW(), paid_by_cvl_id = ? WHERE id = ?");
             $stmt->execute([$adminId, $orderId]);
             $msgSuccess = "Paiement validé pour la commande #$orderId !";
+
+            // Si c'est une requête AJAX, on répond en JSON et on s'arrête là
+            if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                echo json_encode(['success' => true, 'is_paid' => true, 'date' => date('d/m H:i')]);
+                exit;
+            }
         } 
         
         // --- D. ANNULATION PAIEMENT ---
@@ -104,6 +110,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt = $pdo->prepare("UPDATE orders SET is_paid = 0, paid_at = NULL, paid_by_cvl_id = NULL WHERE id = ?");
             $stmt->execute([$orderId]);
             $msgSuccess = "Paiement annulé pour la commande #$orderId.";
+
+            // Si c'est une requête AJAX, on répond en JSON et on s'arrête là
+            if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                echo json_encode(['success' => true, 'is_paid' => false]);
+                exit;
+            }
         }
 
         // --- E. UPDATE COMMANDE (LOGIQUE CORRIGÉE POUR GÉRER L'AJOUT) ---
@@ -456,7 +468,7 @@ foreach ($raw_results as $row) {
                         <div class="card border-0 shadow-sm overflow-hidden">
                             <div class="row g-0 align-items-stretch">
                                 <div class="col-lg-3 col-12 bg-light border-end d-flex flex-column">
-                                    <div class="p-3 <?php echo $order['info']['is_paid'] ? 'bg-success text-white' : 'bg-warning text-dark'; ?> bg-opacity-10 border-bottom">
+                                    <div id="order-header-<?php echo $order['info']['id']; ?>" class="p-3 <?php echo $order['info']['is_paid'] ? 'bg-success text-white' : 'bg-warning text-dark'; ?> bg-opacity-10 border-bottom">
                                         <div class="d-flex justify-content-between align-items-center">
                                             <span class="badge bg-dark">#<?php echo str_pad($order['info']['id'], 4, '0', STR_PAD_LEFT); ?></span>
                                             <small class="fw-bold"><?php echo date('d/m H:i', strtotime($order['info']['date'])); ?></small>
@@ -472,18 +484,30 @@ foreach ($raw_results as $row) {
                                             <div class="card-body p-2 text-center">
                                                 <div class="small text-muted mb-1">Total à payer</div>
                                                 <div class="fs-4 fw-bold text-primary mb-2"><?php echo number_format($order['info']['total_price'], 2); ?> €</div>
-                                                <?php if($order['info']['is_paid']): ?>
-                                                    <div class="alert alert-success py-1 px-2 mb-2 small"><i class="fas fa-check-circle me-1"></i> Payé le <?php echo date('d/m H:i', strtotime($order['info']['paid_at'])); ?></div>
-                                                    <form method="POST" onsubmit="return confirm('⚠️ Annuler le paiement ?');">
-                                                        <input type="hidden" name="action" value="cancel_payment"><input type="hidden" name="order_id" value="<?php echo $order['info']['id']; ?>">
-                                                        <button type="submit" class="btn btn-outline-danger btn-sm w-100">Annuler paiement</button>
-                                                    </form>
-                                                <?php else: ?>
-                                                    <form method="POST">
-                                                        <input type="hidden" name="action" value="validate_payment"><input type="hidden" name="order_id" value="<?php echo $order['info']['id']; ?>">
-                                                        <button type="submit" class="btn btn-danger w-100 fw-bold shadow-sm pulse-button"><i class="fas fa-hand-holding-dollar me-1"></i> Encaisser</button>
-                                                    </form>
-                                                <?php endif; ?>
+
+                                                <div id="payment-box-<?php echo $order['info']['id']; ?>">
+                                                    <?php if($order['info']['is_paid']): ?>
+                                                        <div class="alert alert-success py-1 px-2 mb-2 small d-flex align-items-center justify-content-center">
+                                                            <i class="fas fa-check-circle me-1"></i> 
+                                                            <span>Payé le <?php echo date('d/m H:i', strtotime($order['info']['paid_at'])); ?></span>
+                                                        </div>
+                                                        <form method="POST" class="ajax-form" onsubmit="return confirm('⚠️ Attention : Annuler le paiement ?');">
+                                                            <input type="hidden" name="action" value="cancel_payment">
+                                                            <input type="hidden" name="order_id" value="<?php echo $order['info']['id']; ?>">
+                                                            <button type="submit" class="btn btn-outline-danger btn-sm w-100" style="font-size: 0.8rem;">
+                                                                Annuler paiement
+                                                            </button>
+                                                        </form>
+                                                    <?php else: ?>
+                                                        <form method="POST" class="ajax-form">
+                                                            <input type="hidden" name="action" value="validate_payment">
+                                                            <input type="hidden" name="order_id" value="<?php echo $order['info']['id']; ?>">
+                                                            <button type="submit" class="btn btn-danger w-100 fw-bold shadow-sm pulse-button">
+                                                                <i class="fas fa-hand-holding-dollar me-1"></i> Encaisser
+                                                            </button>
+                                                        </form>
+                                                    <?php endif; ?>
+                                                </div>
                                             </div>
                                         </div>
                                         <button class="btn btn-outline-dark btn-sm w-100" data-bs-toggle="modal" data-bs-target="#editModal<?php echo $order['info']['id']; ?>">
@@ -683,5 +707,71 @@ foreach ($raw_results as $row) {
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    document.body.addEventListener('submit', function(e) {
+        // On cible uniquement nos formulaires AJAX
+        if (e.target.classList.contains('ajax-form')) {
+            e.preventDefault(); // Empêche le rechargement de page
+
+            const form = e.target;
+            const formData = new FormData(form);
+            formData.append('ajax', '1'); // On dit au serveur que c'est de l'AJAX
+
+            const orderId = formData.get('order_id');
+            const action = formData.get('action');
+            
+            // Récupération des éléments à modifier visuellement
+            const headerEl = document.getElementById('order-header-' + orderId);
+            const boxEl = document.getElementById('payment-box-' + orderId);
+
+            fetch('manage_orders', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // MISE À JOUR VISUELLE
+                    if (data.is_paid) {
+                        // Passage en mode PAYÉ (Vert)
+                        headerEl.classList.remove('bg-warning', 'text-dark');
+                        headerEl.classList.add('bg-success', 'text-white');
+
+                        boxEl.innerHTML = `
+                            <div class="alert alert-success py-1 px-2 mb-2 small d-flex align-items-center justify-content-center">
+                                <i class="fas fa-check-circle me-1"></i> 
+                                <span>Payé le ${data.date}</span>
+                            </div>
+                            <form method="POST" class="ajax-form" onsubmit="return confirm('⚠️ Attention : Annuler le paiement ?');">
+                                <input type="hidden" name="action" value="cancel_payment">
+                                <input type="hidden" name="order_id" value="${orderId}">
+                                <button type="submit" class="btn btn-outline-danger btn-sm w-100" style="font-size: 0.8rem;">
+                                    Annuler paiement
+                                </button>
+                            </form>
+                        `;
+                    } else {
+                        // Passage en mode IMPAYÉ (Orange/Rouge)
+                        headerEl.classList.remove('bg-success', 'text-white');
+                        headerEl.classList.add('bg-warning', 'text-dark');
+
+                        boxEl.innerHTML = `
+                            <form method="POST" class="ajax-form">
+                                <input type="hidden" name="action" value="validate_payment">
+                                <input type="hidden" name="order_id" value="${orderId}">
+                                <button type="submit" class="btn btn-danger w-100 fw-bold shadow-sm pulse-button">
+                                    <i class="fas fa-hand-holding-dollar me-1"></i> Encaisser
+                                </button>
+                            </form>
+                        `;
+                    }
+                }
+            })
+            .catch(error => console.error('Erreur:', error));
+        }
+    });
+});
+</script>
 </body>
 </html>
