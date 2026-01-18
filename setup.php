@@ -40,7 +40,7 @@ if ($nom_url && $prenom_url && $signature_recue) {
 // ---------------------------------------------------------
 // VÉRIFICATION EXISTANT
 // ---------------------------------------------------------
-$stmt = $pdo->prepare("SELECT * FROM project_users WHERE user_id = ?");
+$stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
 $stmt->execute([$current_user_id]);
 if ($stmt->fetch()) {
     header("Location: index.php");
@@ -60,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $prenom_final = trim($_POST['prenom']);
 
     if ($classId && $nom_final && $prenom_final) {
-        $stmtInsert = $pdo->prepare("INSERT INTO project_users (user_id, nom, prenom, class_id) VALUES (?, ?, ?, ?)");
+        $stmtInsert = $pdo->prepare("INSERT INTO users (user_id, nom, prenom, class_id) VALUES (?, ?, ?, ?)");
         $stmtInsert->execute([$current_user_id, $nom_final, $prenom_final, $classId]);
         
         header("Location: index.php");
