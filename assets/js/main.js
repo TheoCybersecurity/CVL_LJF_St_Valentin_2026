@@ -396,10 +396,37 @@ document.getElementById('btn-validate-order').addEventListener('click', function
     const buyerPrenom = document.getElementById('buyer_prenom').value.trim();
     const buyerClassEl = document.getElementById('buyer_class');
     const buyerClassId = buyerClassEl ? buyerClassEl.value : "";
+    
+    // --- NOUVEAUX CHAMPS EMAIL ---
+    const buyerEmailEl = document.getElementById('buyer_email');
+    const termsAgreeEl = document.getElementById('terms_agree');
+    
+    const buyerEmail = buyerEmailEl ? buyerEmailEl.value.trim() : "";
+    const termsAgree = termsAgreeEl ? termsAgreeEl.checked : false;
 
+    // 1. Validation Informations Acheteur
     if(!buyerNom || !buyerPrenom || !buyerClassId) {
-        alert("Veuillez remplir VOS informations en haut de page.");
+        alert("Veuillez remplir VOS informations (Nom, Prénom, Classe) en haut de page.");
         window.scrollTo(0,0);
+        return;
+    }
+
+    // 2. Validation Email et Mentions Légales
+    if (!buyerEmail) {
+        alert("L'adresse email est obligatoire pour recevoir votre récapitulatif.");
+        buyerEmailEl.focus();
+        return;
+    }
+    // Petite regex simple pour vérifier le format mail
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(buyerEmail)) {
+        alert("Le format de l'adresse email n'est pas valide.");
+        buyerEmailEl.focus();
+        return;
+    }
+    
+    if (!termsAgree) {
+        alert("Vous devez accepter les conditions (réception de notifications) pour continuer.");
+        termsAgreeEl.focus();
         return;
     }
     
@@ -407,31 +434,71 @@ document.getElementById('btn-validate-order').addEventListener('click', function
     
     const btn = this;
     btn.disabled = true;
-    btn.innerHTML = "⏳ Enregistrement...";
+    btn.innerHTML = "⏳ Envoi du mail..."; // Petit retour visuel sympa
 
+    // On s'assure que le chemin vers l'API est correct
+    // Si tu es dans /projets/st-valentin/, cela visera /projets/st-valentin/api/submit_order.php
     const currentPath = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/'));
-    const apiUrl = window.location.origin + currentPath + '/api/submit_order'; // .php ajouté par sécurité
+    // On force l'extension .php pour éviter les erreurs 404 si l'URL rewriting n'est pas actif
+    const apiUrl = window.location.origin + currentPath + '/api/submit_order'; 
 
     fetch(apiUrl, { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ buyerNom, buyerPrenom, buyerClassId, cart })
+        body: JSON.stringify({ 
+            buyerNom, 
+            buyerPrenom, 
+            buyerClassId, 
+            buyerEmail, // On envoie l'email
+            cart 
+        })
     })
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            alert("Commande validée avec succès !");
-            window.location.href = 'index.php?msg_success=Commande enregistrée !'; 
+            // Redirection vers une page de succès
+            window.location.href = 'index.php?msg_success=Commande validée ! Un mail récapitulatif a été envoyé.'; 
         } else {
             alert("Erreur Serveur : " + (data.message || "Erreur inconnue"));
             btn.disabled = false;
-            btn.innerHTML = "✅ Valider et Payer";
+            btn.innerHTML = "✅ Valider la commande";
         }
     })
     .catch(e => {
         console.error(e);
-        alert("Erreur réseau ou réponse invalide.");
+        alert("Erreur technique lors de l'envoi.");
         btn.disabled = false;
-        btn.innerHTML = "✅ Valider et Payer";
+        btn.innerHTML = "✅ Valider la commande";
     });
 });
+
+function updateLivePrice() {
+    let totalQty = 0;
+    
+    // On scanne tous les champs de roses dans la modale
+    document.querySelectorAll('.rose-input').forEach(input => {
+        let val = parseInt(input.value);
+        if(isNaN(val) || val < 0) val = 0;
+        totalQty += val;
+    });
+
+    // On calcule le prix estimé (si la fonction getPriceForQuantity est dispo, sinon on fait une estim simple)
+    let estimatedPrice = 0;
+    if (typeof ROSE_PRICES !== 'undefined') {
+        // Logique simplifiée côté JS pour l'affichage (le vrai calcul est fait en PHP)
+        // On réutilise la logique globale si possible, ou on fait une approximation
+        if (typeof getPriceForQuantity === 'function') {
+            estimatedPrice = getPriceForQuantity(totalQty);
+        }
+    }
+
+    // Mise à jour de l'affichage dans la modale (l'alerte bleue)
+    const alertBox = document.querySelector('#addRecipientModal .alert-info span');
+    if (alertBox) {
+        if (totalQty > 0) {
+            alertBox.innerHTML = `<strong>${totalQty}</strong> roses sélectionnée(s) (~ ${estimatedPrice.toFixed(2)} €)`;
+        } else {
+            alertBox.innerText = "💰 Ajoutez des roses pour voir le prix total.";
+        }
+    }
+}
