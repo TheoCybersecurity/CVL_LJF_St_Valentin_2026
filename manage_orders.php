@@ -2,6 +2,7 @@
 // manage_orders.php
 require_once 'db.php';
 require_once 'auth_check.php'; 
+require_once 'mail_config.php'; // <--- AJOUT IMPORTANT POUR LES MAILS
 
 checkAccess('cvl');
 
@@ -9,7 +10,7 @@ checkAccess('cvl');
 $allClasses = $pdo->query("SELECT id, name FROM classes ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
 $allRooms = $pdo->query("SELECT id, name FROM rooms ORDER BY name")->fetchAll(PDO::FETCH_KEY_PAIR);
 
-// Produits (Roses) : CORRECTION ICI (FETCH_KEY_PAIR pour avoir [ID => NOM])
+// Produits (Roses)
 $stmtRoses = $pdo->query("SELECT id, name FROM rose_products");
 $allRoseTypes = $stmtRoses->fetchAll(PDO::FETCH_KEY_PAIR);
 
@@ -91,34 +92,144 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
         }
 
-        // --- C. VALIDATION PAIEMENT ---
+        // --- C. VALIDATION PAIEMENT (AVEC ENVOI DE MAIL) ---
         elseif ($_POST['action'] === 'validate_payment' && $orderId > 0) {
             $adminId = $_SESSION['user_id'] ?? null; 
+            
+            // 1. Mise à jour de la base de données
             $stmt = $pdo->prepare("UPDATE orders SET is_paid = 1, paid_at = NOW(), paid_by_cvl_id = ? WHERE id = ?");
             $stmt->execute([$adminId, $orderId]);
+            
+            // 2. ENVOI DU MAIL DE CONFIRMATION
+            try {
+                // On récupère les infos de l'acheteur
+                $stmtInfo = $pdo->prepare("
+                    SELECT u.email, u.nom, u.prenom, o.total_price 
+                    FROM orders o 
+                    JOIN users u ON o.user_id = u.user_id 
+                    WHERE o.id = ?
+                ");
+                $stmtInfo->execute([$orderId]);
+                $orderInfo = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+
+                if ($orderInfo && !empty($orderInfo['email'])) {
+                    $mail = getMailer();
+                    $mail->addAddress($orderInfo['email']);
+                    
+                    $montant = number_format($orderInfo['total_price'], 2);
+                    $prenom = htmlspecialchars($orderInfo['prenom']);
+                    
+                    $body = "
+                    <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px;'>
+                        <div style='background-color: #198754; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
+                            <h1 style='margin: 0;'>Paiement Reçu ! ✅</h1>
+                        </div>
+                        <div style='padding: 20px; color: #333;'>
+                            <p>Bonjour <strong>$prenom</strong>,</p>
+                            <p>Bonne nouvelle ! Le CVL confirme la réception de votre paiement de <strong>$montant €</strong> pour la commande <strong>#$orderId</strong>.</p>
+                            
+                            <div style='background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #198754;'>
+                                <p style='margin: 0;'>Vos roses sont désormais validées. Elles seront préparées et distribuées le jour de la Saint-Valentin.</p>
+                            </div>
+
+                            <p style='font-size: 0.9em; color: #666;'>
+                                Prochaine étape : La distribution 🚚<br>
+                                Vous recevrez un mail lorsque les roses seront livrées.
+                            </p>
+                            
+                            <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>
+                            <p style='font-size: 0.8em; color: #888; text-align: center;'>L'équipe du CVL.</p>
+                        </div>
+                    </div>";
+
+                    $mail->isHTML(true);
+                    $mail->Subject = "Paiement validé - Commande #$orderId";
+                    $mail->Body    = $body;
+                    $mail->AltBody = "Paiement de $montant EUR reçu pour la commande #$orderId. Merci !";
+                    $mail->send();
+                }
+            } catch (Exception $e) {
+                // On ne bloque pas l'admin si le mail échoue, mais on le note dans les logs
+                error_log("Erreur mail paiement commande $orderId : " . $e->getMessage());
+            }
+
             $msgSuccess = "Paiement validé pour la commande #$orderId !";
 
-            // Si c'est une requête AJAX, on répond en JSON et on s'arrête là
+            // Si c'est une requête AJAX
             if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
                 echo json_encode(['success' => true, 'is_paid' => true, 'date' => date('d/m H:i')]);
                 exit;
             }
         } 
         
-        // --- D. ANNULATION PAIEMENT ---
+        // --- D. ANNULATION PAIEMENT (AVEC MAIL DE CORRECTION) ---
         elseif ($_POST['action'] === 'cancel_payment' && $orderId > 0) {
+            // 1. Mise à jour en base (Retour à impayé)
             $stmt = $pdo->prepare("UPDATE orders SET is_paid = 0, paid_at = NULL, paid_by_cvl_id = NULL WHERE id = ?");
             $stmt->execute([$orderId]);
-            $msgSuccess = "Paiement annulé pour la commande #$orderId.";
 
-            // Si c'est une requête AJAX, on répond en JSON et on s'arrête là
+            // 2. ENVOI DU MAIL D'ANNULATION
+            try {
+                // On récupère les infos pour le mail
+                $stmtInfo = $pdo->prepare("
+                    SELECT u.email, u.prenom, o.total_price 
+                    FROM orders o 
+                    JOIN users u ON o.user_id = u.user_id 
+                    WHERE o.id = ?
+                ");
+                $stmtInfo->execute([$orderId]);
+                $orderInfo = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+
+                if ($orderInfo && !empty($orderInfo['email'])) {
+                    $mail = getMailer();
+                    $mail->addAddress($orderInfo['email']);
+                    
+                    $prenom = htmlspecialchars($orderInfo['prenom']);
+                    $montant = number_format($orderInfo['total_price'], 2);
+
+                    $body = "
+                    <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px;'>
+                        <div style='background-color: #dc3545; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
+                            <h1 style='margin: 0;'>Paiement Annulé ❌</h1>
+                        </div>
+                        <div style='padding: 20px; color: #333;'>
+                            <p>Bonjour <strong>$prenom</strong>,</p>
+                            <p>Suite à une erreur de manipulation administrative, nous avons annulé la validation du paiement de votre commande <strong>#$orderId</strong>.</p>
+                            
+                            <div style='background-color: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #ffc107; color: #856404;'>
+                                <p style='margin: 0;'><strong>Statut actuel : À payer ($montant €)</strong><br>
+                                Si vous n'avez pas encore réglé, merci de venir au foyer/CVL pour finaliser la commande.</p>
+                            </div>
+
+                            <p style='font-size: 0.9em; color: #666;'>
+                                Si vous pensez qu'il s'agit d'une erreur de notre part et que vous avez bien payé, n'hésitez pas à venir nous voir.
+                            </p>
+                            
+                            <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>
+                            <p style='font-size: 0.8em; color: #888; text-align: center;'>L'équipe du CVL.</p>
+                        </div>
+                    </div>";
+
+                    $mail->isHTML(true);
+                    $mail->Subject = "Correction : Paiement annulé - Commande #$orderId";
+                    $mail->Body    = $body;
+                    $mail->AltBody = "Le statut 'Payé' de votre commande #$orderId a été annulé suite à une erreur. Merci de venir régler.";
+                    $mail->send();
+                }
+            } catch (Exception $e) {
+                error_log("Erreur mail annulation commande $orderId : " . $e->getMessage());
+            }
+
+            $msgSuccess = "Paiement annulé pour la commande #$orderId (Mail de correction envoyé).";
+
+            // Si c'est une requête AJAX
             if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
                 echo json_encode(['success' => true, 'is_paid' => false]);
                 exit;
             }
         }
 
-        // --- E. UPDATE COMMANDE (LOGIQUE CORRIGÉE POUR GÉRER L'AJOUT) ---
+        // --- E. UPDATE COMMANDE ---
         elseif ($_POST['action'] === 'update_order' && $orderId > 0) {
             $pdo->beginTransaction();
             $calculatedTotalPrice = 0.0;
@@ -151,7 +262,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $stmtGift = $pdo->prepare("UPDATE order_recipients SET is_anonymous = ?, message_id = ? WHERE id = ?");
                     $stmtGift->execute([$isAnon, $messageIdToSave, $orderRecipientId]);
 
-                    // GESTION DES ROSES (UPDATE ou INSERT)
+                    // GESTION DES ROSES
                     $totalRosesForRecipient = 0;
                     if (isset($rData['roses']) && is_array($rData['roses'])) {
                         foreach ($rData['roses'] as $roseTypeId => $qty) {
@@ -159,13 +270,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             $qty = intval($qty);
                             if ($qty < 0) $qty = 0;
 
-                            // Vérifier si cette rose existe déjà pour ce destinataire
                             $stmtCheck = $pdo->prepare("SELECT id FROM recipient_roses WHERE recipient_id = ? AND rose_product_id = ?");
                             $stmtCheck->execute([$orderRecipientId, $roseTypeId]);
                             $existingLink = $stmtCheck->fetchColumn();
 
                             if ($existingLink) {
-                                // Mise à jour ou suppression si 0
                                 if ($qty > 0) {
                                     $pdo->prepare("UPDATE recipient_roses SET quantity = ? WHERE id = ?")->execute([$qty, $existingLink]);
                                     $totalRosesForRecipient += $qty;
@@ -173,7 +282,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                     $pdo->prepare("DELETE FROM recipient_roses WHERE id = ?")->execute([$existingLink]);
                                 }
                             } else {
-                                // Insertion si nouvelle rose et qty > 0
                                 if ($qty > 0) {
                                     $pdo->prepare("INSERT INTO recipient_roses (recipient_id, rose_product_id, quantity) VALUES (?, ?, ?)")
                                         ->execute([$orderRecipientId, $roseTypeId, $qty]);
@@ -183,7 +291,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         }
                     }
 
-                    // Calcul Prix pour ce destinataire
+                    // Calcul Prix
                     if ($totalRosesForRecipient > 0) {
                         if (isset($rosesPriceTable[$totalRosesForRecipient])) {
                             $calculatedTotalPrice += floatval($rosesPriceTable[$totalRosesForRecipient]);
@@ -213,7 +321,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
 
-            // Update Prix Total Commande
+            // Update Prix Total
             $stmtPrice = $pdo->prepare("UPDATE orders SET total_price = ? WHERE id = ?");
             $stmtPrice->execute([$calculatedTotalPrice, $orderId]);
 
@@ -347,7 +455,6 @@ foreach ($raw_results as $row) {
     ];
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -706,70 +813,152 @@ foreach ($raw_results as $row) {
     </div>
 </div>
 
+<div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 9999;">
+    <div id="paymentToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="false">
+        <div class="toast-header bg-success text-white">
+            <i class="fas fa-envelope me-2"></i>
+            <strong class="me-auto">Validation en cours</strong>
+            <small class="text-white-50">Juste un instant...</small>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body bg-white">
+            <p class="mb-2 text-dark">L'e-mail de confirmation sera envoyé dans <strong id="toastCountdown" class="text-primary fs-5">5</strong> secondes.</p>
+            <div class="progress mb-3" style="height: 5px;">
+                <div id="toastProgressBar" class="progress-bar bg-success" role="progressbar" style="width: 100%; transition: none;"></div>
+            </div>
+            <button type="button" id="toastCancelBtn" class="btn btn-outline-danger btn-sm w-100 fw-bold">
+                <i class="fas fa-undo me-1"></i> ANNULER L'ENVOI
+            </button>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    document.body.addEventListener('submit', function(e) {
-        // On cible uniquement nos formulaires AJAX
-        if (e.target.classList.contains('ajax-form')) {
-            e.preventDefault(); // Empêche le rechargement de page
+    
+    // --- GESTION DU COMPTE À REBOURS ET ENVOI MAIL ---
+    let timer = null;
+    let seconds = 5;
+    let pendingFormData = null;
 
-            const form = e.target;
-            const formData = new FormData(form);
-            formData.append('ajax', '1'); // On dit au serveur que c'est de l'AJAX
+    // Récupération des éléments du Toast
+    const toastEl = document.getElementById('paymentToast');
+    const toast = new bootstrap.Toast(toastEl);
+    const progressBar = document.getElementById('toastProgressBar');
+    const countdownSpan = document.getElementById('toastCountdown');
+    const cancelBtn = document.getElementById('toastCancelBtn');
 
-            const orderId = formData.get('order_id');
-            const action = formData.get('action');
-            
-            // Récupération des éléments à modifier visuellement
-            const headerEl = document.getElementById('order-header-' + orderId);
-            const boxEl = document.getElementById('payment-box-' + orderId);
+    // Fonction pour envoyer la requête AJAX
+    function runAjax(formData) {
+        const orderId = formData.get('order_id');
+        const headerEl = document.getElementById('order-header-' + orderId);
+        const boxEl = document.getElementById('payment-box-' + orderId);
 
-            fetch('manage_orders', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    // MISE À JOUR VISUELLE
-                    if (data.is_paid) {
-                        // Passage en mode PAYÉ (Vert)
-                        headerEl.classList.remove('bg-warning', 'text-dark');
-                        headerEl.classList.add('bg-success', 'text-white');
+        fetch('manage_orders', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                if (data.is_paid) {
+                    // Visuel : PAYÉ
+                    headerEl.classList.remove('bg-warning', 'text-dark');
+                    headerEl.classList.add('bg-success', 'text-white');
+                    
+                    boxEl.innerHTML = `
+                        <div class="alert alert-success py-1 px-2 mb-2 small d-flex align-items-center justify-content-center">
+                            <i class="fas fa-check-circle me-1"></i> 
+                            <span>Payé le ${data.date}</span>
+                        </div>
+                        <form method="POST" class="ajax-form" onsubmit="return confirm('⚠️ Attention : Annuler le paiement ?');">
+                            <input type="hidden" name="action" value="cancel_payment">
+                            <input type="hidden" name="order_id" value="${orderId}">
+                            <button type="submit" class="btn btn-outline-danger btn-sm w-100" style="font-size: 0.8rem;">
+                                Annuler paiement
+                            </button>
+                        </form>
+                    `;
+                } else {
+                    // Visuel : IMPAYÉ
+                    headerEl.classList.remove('bg-success', 'text-white');
+                    headerEl.classList.add('bg-warning', 'text-dark');
 
-                        boxEl.innerHTML = `
-                            <div class="alert alert-success py-1 px-2 mb-2 small d-flex align-items-center justify-content-center">
-                                <i class="fas fa-check-circle me-1"></i> 
-                                <span>Payé le ${data.date}</span>
-                            </div>
-                            <form method="POST" class="ajax-form" onsubmit="return confirm('⚠️ Attention : Annuler le paiement ?');">
-                                <input type="hidden" name="action" value="cancel_payment">
-                                <input type="hidden" name="order_id" value="${orderId}">
-                                <button type="submit" class="btn btn-outline-danger btn-sm w-100" style="font-size: 0.8rem;">
-                                    Annuler paiement
-                                </button>
-                            </form>
-                        `;
-                    } else {
-                        // Passage en mode IMPAYÉ (Orange/Rouge)
-                        headerEl.classList.remove('bg-success', 'text-white');
-                        headerEl.classList.add('bg-warning', 'text-dark');
-
-                        boxEl.innerHTML = `
-                            <form method="POST" class="ajax-form">
-                                <input type="hidden" name="action" value="validate_payment">
-                                <input type="hidden" name="order_id" value="${orderId}">
-                                <button type="submit" class="btn btn-danger w-100 fw-bold shadow-sm pulse-button">
-                                    <i class="fas fa-hand-holding-dollar me-1"></i> Encaisser
-                                </button>
-                            </form>
-                        `;
-                    }
+                    boxEl.innerHTML = `
+                        <form method="POST" class="ajax-form">
+                            <input type="hidden" name="action" value="validate_payment">
+                            <input type="hidden" name="order_id" value="${orderId}">
+                            <button type="submit" class="btn btn-danger w-100 fw-bold shadow-sm pulse-button">
+                                <i class="fas fa-hand-holding-dollar me-1"></i> Encaisser
+                            </button>
+                        </form>
+                    `;
                 }
-            })
-            .catch(error => console.error('Erreur:', error));
+            } else {
+                console.error("Erreur serveur:", data);
+                alert("Une erreur est survenue.");
+            }
+        })
+        .catch(error => console.error('Erreur:', error));
+    }
+
+    // Écouteur global sur les formulaires
+    document.body.addEventListener('submit', function(e) {
+        if (e.target.classList.contains('ajax-form')) {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            formData.append('ajax', '1'); // Marqueur Ajax
+            
+            const action = formData.get('action');
+
+            if (action === 'validate_payment') {
+                // --- CAS SPÉCIAL : VALIDATION PAIEMENT ---
+                // On stocke les données et on lance le timer
+                pendingFormData = formData;
+                
+                // Reset de l'interface du Toast
+                seconds = 5;
+                countdownSpan.innerText = seconds;
+                progressBar.style.width = '100%';
+                progressBar.style.transition = 'none'; // Pas d'anim pour le reset
+                
+                toast.show();
+                
+                // Petit délai pour réactiver l'animation CSS de la barre
+                setTimeout(() => {
+                    progressBar.style.transition = 'width 5s linear';
+                    progressBar.style.width = '0%';
+                }, 10);
+
+                // Démarrage du compte à rebours
+                if (timer) clearInterval(timer);
+                timer = setInterval(() => {
+                    seconds--;
+                    countdownSpan.innerText = seconds;
+                    
+                    if (seconds <= 0) {
+                        // FIN DU TIMER : On valide
+                        clearInterval(timer);
+                        toast.hide();
+                        runAjax(pendingFormData);
+                    }
+                }, 1000);
+
+            } else {
+                // --- AUTRES CAS (ex: Annuler paiement) ---
+                // Exécution immédiate
+                runAjax(formData);
+            }
         }
+    });
+
+    // Bouton ANNULER dans le Toast
+    cancelBtn.addEventListener('click', function() {
+        clearInterval(timer); // Stoppe le timer
+        toast.hide();         // Cache la notif
+        pendingFormData = null; // Oublie la requête
     });
 });
 </script>
