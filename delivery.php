@@ -2,6 +2,7 @@
 // delivery.php
 require_once 'db.php';
 require_once 'auth_check.php'; 
+require_once 'mail_config.php';
 checkAccess('cvl');
 
 // ==============================================================================
@@ -20,9 +21,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
         try {
             if (isset($_POST['action']) && $_POST['action'] === 'mark_distributed') {
+                // 1. Mise à jour de la base de données (Déjà existant)
                 $stmt = $pdo->prepare("UPDATE order_recipients SET is_distributed = 1, distributed_at = NOW(), distributed_by_cvl_id = ? WHERE id = ?");
                 $stmt->execute([$adminId, $id]);
                 
+                // ============================================================
+                // 2. ENVOI DU MAIL DE CONFIRMATION "LIVRÉ" (NOUVEAU)
+                // ============================================================
+                try {
+                    // Récupération des infos (Email acheteur + Noms)
+                    $stmtInfo = $pdo->prepare("
+                        SELECT 
+                            u.email, u.prenom as buyer_prenom, 
+                            r.prenom as dest_prenom, r.nom as dest_nom,
+                            rp.name as rose_name
+                        FROM order_recipients ort
+                        JOIN orders o ON ort.order_id = o.id
+                        JOIN users u ON o.user_id = u.user_id
+                        JOIN recipients r ON ort.recipient_id = r.id
+                        -- Optionnel : pour savoir quel type de fleur (si unique) ou juste générique
+                        LEFT JOIN recipient_roses rr ON ort.id = rr.recipient_id
+                        LEFT JOIN rose_products rp ON rr.rose_product_id = rp.id
+                        WHERE ort.id = ?
+                        LIMIT 1
+                    ");
+                    $stmtInfo->execute([$id]);
+                    $info = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+
+                    if ($info && !empty($info['email'])) {
+                        $mail = getMailer(); // Votre fonction helpers
+                        $mail->addAddress($info['email']);
+                        
+                        $buyerName = htmlspecialchars($info['buyer_prenom']);
+                        $destName  = htmlspecialchars($info['dest_prenom'] . ' ' . $info['dest_nom']);
+                        
+                        // Contenu du mail
+                        $body = "
+                        <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px;'>
+                            <div style='background-color: #198754; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
+                                <h1 style='margin: 0;'>Mission Accomplie ! 🚀</h1>
+                            </div>
+                            <div style='padding: 20px; color: #333;'>
+                                <p>Salut <strong>$buyerName</strong>,</p>
+                                <p>Bonne nouvelle : ta commande pour <strong>$destName</strong> vient d'être distribuée ! 🌹</p>
+                                
+                                <div style='background-color: #f8f9fa; padding: 15px; border-left: 4px solid #198754; margin: 20px 0; font-style: italic;'>
+                                    Le destinataire a bien reçu sa surprise en main propre.
+                                </div>
+
+                                <p>Merci d'avoir participé à l'opération Saint-Valentin du CVL !</p>
+                                
+                                <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>
+                                <p style='font-size: 0.8em; color: #888; text-align: center;'>L'équipe du CVL.</p>
+                            </div>
+                        </div>";
+
+                        $mail->isHTML(true);
+                        $mail->Subject = "✅ C'est livré ! (Pour $destName)";
+                        $mail->Body    = $body;
+                        $mail->AltBody = "Salut $buyerName, ta commande pour $destName a bien été distribuée ! Merci, Le CVL.";
+                        
+                        $mail->send();
+                    }
+                } catch (Exception $e) {
+                    // On log l'erreur mais on ne bloque pas la réponse JSON (l'utilisateur ne doit pas voir d'erreur si juste le mail plante)
+                    error_log("Erreur envoi mail distribution (ID: $id) : " . $e->getMessage());
+                }
+                // ============================================================
+
                 $response = [
                     'success' => true, 
                     'action' => 'marked',
@@ -373,170 +439,189 @@ if ($searchQuery) {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
-<script>
-// =================================================================
-// JAVASCRIPT SPÉCIFIQUE POUR DELIVERY.PHP
-// =================================================================
+<div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 9999;">
+    <div id="deliveryToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="false">
+        <div class="toast-header bg-success text-white">
+            <i class="fas fa-truck me-2"></i> <strong class="me-auto">Livraison en cours</strong>
+            <small class="text-white-50">Juste un instant...</small>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body bg-white">
+            <p class="mb-2 text-dark">L'e-mail de confirmation sera envoyé dans <strong id="toastCountdown" class="text-success fs-5">5</strong> secondes.</p>
+            <div class="progress mb-3" style="height: 5px;">
+                <div id="toastProgressBar" class="progress-bar bg-success" role="progressbar" style="width: 100%; transition: none;"></div>
+            </div>
+            <button type="button" id="toastCancelBtn" class="btn btn-outline-danger btn-sm w-100 fw-bold">
+                <i class="fas fa-undo me-1"></i> ANNULER L'ENVOI
+            </button>
+        </div>
+    </div>
+</div>
 
+<script>
 document.addEventListener('DOMContentLoaded', function() {
     
-    // 1. Gestion des clics sur les formulaires de livraison
-    const forms = document.querySelectorAll('.ajax-delivery-form');
-    
-    forms.forEach(form => {
-        form.addEventListener('submit', function(e) {
-            e.preventDefault();
-            
-            const btn = this.querySelector('.btn-action');
-            const originalIcon = btn.innerHTML;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-            btn.disabled = true;
+    // --- VARIABLES GLOBALES ---
+    let timer = null;
+    let seconds = 5;
+    let pendingFormData = null;
+    let pendingButton = null; // Pour réactiver le bouton si on annule
 
-            const formData = new FormData(this);
-            formData.append('ajax', '1'); // Dit au PHP de répondre en JSON
-            const giftId = formData.get('gift_id');
+    // --- ÉLÉMENTS DU TOAST ---
+    const toastEl = document.getElementById('deliveryToast');
+    const toast = new bootstrap.Toast(toastEl);
+    const progressBar = document.getElementById('toastProgressBar');
+    const countdownSpan = document.getElementById('toastCountdown');
+    const cancelBtn = document.getElementById('toastCancelBtn');
 
-            fetch('delivery', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    // --- GESTION DE LA SUPPRESSION VISUELLE INTELLIGENTE ---
-                    const row = document.getElementById('recipient-row-' + giftId);
-                    
-                    if (row) {
-                        // On trouve le conteneur de la salle (room-block)
-                        const roomBlock = row.closest('.room-block');
+    // --- FONCTION QUI ENVOIE RÉELLEMENT AU SERVEUR (Après 5s) ---
+    function runDeliveryAjax(formData, btnElement) {
+        const giftId = formData.get('gift_id');
+
+        fetch('delivery', { // Assurez-vous que le nom du fichier est bon
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // --- SUCCÈS : ON SUPPRIME LA LIGNE VISUELLEMENT ---
+                const row = document.getElementById('recipient-row-' + giftId);
+                
+                if (row) {
+                    // Animation de suppression
+                    row.style.transition = 'all 0.5s ease';
+                    row.style.transform = 'translateX(100%)';
+                    row.style.opacity = '0';
+                    row.style.height = '0';
+                    row.style.margin = '0';
+                    row.style.padding = '0';
+
+                    // Gestion du compteur de la salle
+                    const roomBlock = row.closest('.room-block');
+                    if (roomBlock) {
+                        const badge = roomBlock.querySelector('.js-room-count');
+                        // On compte ceux qui ne sont pas effacés
+                        const remaining = Array.from(roomBlock.querySelectorAll('.recipient-item')).filter(item => item.style.opacity !== '0').length;
                         
-                        if (roomBlock) {
-                            // On compte combien d'élèves il reste VISUELLEMENT (avant suppression)
-                            // On exclut ceux qui sont déjà en train d'être supprimés (si clic très rapide)
-                            const remainingItems = Array.from(roomBlock.querySelectorAll('.recipient-item')).filter(item => item.style.opacity !== '0');
-                            
-                            if (remainingItems.length <= 1) {
-                                // C'était le dernier de la salle ! On supprime TOUT le bloc
-                                roomBlock.style.transition = 'all 0.5s ease';
-                                roomBlock.style.opacity = '0';
-                                roomBlock.style.height = '0'; // Pour replier l'espace
-                                roomBlock.style.marginTop = '0';
-                                roomBlock.style.marginBottom = '0';
-                                
-                                setTimeout(() => roomBlock.remove(), 500);
-                            } else {
-                                // Il reste du monde, on supprime juste la ligne
-                                row.style.transition = 'all 0.5s ease';
-                                row.style.opacity = '0';
-                                row.style.transform = 'translateX(20px)';
-                                
-                                // Mise à jour immédiate du compteur
-                                const badge = roomBlock.querySelector('.js-room-count');
-                                if(badge) {
-                                    badge.textContent = remainingItems.length - 1;
-                                }
+                        if (badge) badge.textContent = remaining - 1; // -1 car celui-ci part
 
-                                setTimeout(() => row.remove(), 500);
-                            }
+                        // Si plus personne dans la salle, on cache le bloc salle
+                        if (remaining - 1 <= 0) {
+                            setTimeout(() => {
+                                roomBlock.style.transition = 'opacity 0.5s';
+                                roomBlock.style.opacity = '0';
+                                setTimeout(() => roomBlock.remove(), 500);
+                            }, 500);
                         }
                     }
-                    // -------------------------------------------------------
 
-                    // Afficher le Toast avec option Annuler
-                    if (data.action === 'marked') {
-                        showAjaxToastWithUndo("Livraison confirmée !", 'unmark_distributed', giftId);
-                    } else {
-                        showAjaxToastWithUndo("Livraison annulée.", 'mark_distributed', giftId);
-                    }
-                } else {
-                    alert('Erreur: ' + data.message);
-                    btn.innerHTML = originalIcon;
-                    btn.disabled = false;
+                    // Suppression finale du DOM après l'animation
+                    setTimeout(() => row.remove(), 600);
                 }
-            })
-            .catch(error => {
-                console.error('Erreur:', error);
-                alert('Erreur réseau.');
-                btn.innerHTML = originalIcon;
-                btn.disabled = false;
-            });
+            } else {
+                alert("Erreur : " + data.message);
+                if(btnElement) {
+                    btnElement.disabled = false;
+                    btnElement.innerHTML = '<i class="fas fa-check"></i>'; // Remet l'icône
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Erreur:', error);
+            alert("Erreur réseau.");
+            if(btnElement) {
+                btnElement.disabled = false;
+                btnElement.innerHTML = '<i class="fas fa-check"></i>';
+            }
         });
-    });
-});
-
-/**
- * Fonction personnalisée pour afficher un Toast avec un bouton Undo
- * Elle utilise le conteneur #js-toast-container défini dans toast_notifications.php
- */
-function showAjaxToastWithUndo(message, undoActionName, id) {
-    const container = document.getElementById('js-toast-container');
-    if(!container) return; 
-
-    const toastHtml = `
-        <div class="toast fade align-items-center text-white bg-dark border-0 position-relative" role="alert" aria-live="assertive" aria-atomic="true">
-            <div class="d-flex w-100 justify-content-between align-items-center p-0">
-                <div class="toast-body d-flex align-items-center">
-                    <i class="fas fa-check-circle text-success me-2"></i> ${message}
-                </div>
-                
-                <div class="d-flex align-items-center pe-2">
-                    <button type="button" class="btn btn-sm btn-outline-light me-2" onclick="performUndo('${undoActionName}', ${id})">
-                        Annuler
-                    </button>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
-                </div>
-            </div>
-            <div class="progress-track"><div class="progress-fill"></div></div>
-        </div>
-    `;
-
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = toastHtml;
-    const toastElement = tempDiv.firstElementChild;
-    container.appendChild(toastElement);
-
-    const bsToast = new bootstrap.Toast(toastElement, { delay: 5000 });
-    
-    requestAnimationFrame(() => {
-        bsToast.show();
-    });
-
-    toastElement.addEventListener('hidden.bs.toast', function () {
-        setTimeout(() => { if (toastElement.parentNode) toastElement.remove(); }, 600);
-    });
-}
-
-/**
- * Exécute l'action inverse (Undo) via AJAX
- */
-function performUndo(actionName, id) {
-    const formData = new FormData();
-    formData.append('ajax', '1');
-    formData.append('gift_id', id);
-    
-    if(actionName === 'mark_distributed') {
-        formData.append('action', 'mark_distributed');
-    } else {
-        formData.append(actionName, '1');
     }
 
-    fetch('delivery', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            if(typeof showToast === 'function') {
-                showToast("Action annulée. Rechargement...", 'success');
+    // --- ÉCOUTEUR SUR LES FORMULAIRES ---
+    document.body.addEventListener('submit', function(e) {
+        // On cible uniquement les form de livraison AJAX
+        if (e.target.classList.contains('ajax-delivery-form')) {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            formData.append('ajax', '1');
+            
+            const action = formData.get('action'); // 'mark_distributed' ou undefined (si c'est 'unmark')
+            const btn = e.target.querySelector('.btn-action');
+
+            // CAS 1 : C'est une VALIDATION DE LIVRAISON (Check Vert)
+            if (action === 'mark_distributed') {
+                
+                // 1. On stocke les données pour plus tard
+                pendingFormData = formData;
+                pendingButton = btn;
+
+                // 2. Feedback visuel immédiat sur le bouton (Optionnel mais conseillé)
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-hourglass-half fa-spin"></i>'; // Sablier
+                
+                // 3. Reset du Toast
+                seconds = 5;
+                countdownSpan.innerText = seconds;
+                progressBar.style.width = '100%';
+                progressBar.style.transition = 'none';
+                
+                toast.show();
+                
+                // 4. Lancement animation barre
+                setTimeout(() => {
+                    progressBar.style.transition = 'width 5s linear';
+                    progressBar.style.width = '0%';
+                }, 50);
+
+                // 5. Lancement du Timer
+                if (timer) clearInterval(timer);
+                timer = setInterval(() => {
+                    seconds--;
+                    countdownSpan.innerText = seconds;
+                    
+                    if (seconds <= 0) {
+                        // --- FIN DU TIMER : ENVOI ---
+                        clearInterval(timer);
+                        toast.hide();
+                        runDeliveryAjax(pendingFormData, pendingButton);
+                    }
+                }, 1000);
+
+            } 
+            // CAS 2 : C'est une ANNULATION D'HISTORIQUE (Bouton Rouge 'Undo')
+            else {
+                // Pas de timer pour l'annulation historique, on exécute direct
+                // Note: Ici on recharge souvent la page pour l'historique, ou on fait un traitement simple
+                // Pour faire simple, on envoie direct :
+                const giftId = formData.get('gift_id');
+                
+                fetch('delivery', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(r => r.json())
+                .then(d => {
+                    if(d.success) location.reload(); // Rechargement simple pour remettre la ligne
+                });
             }
-            setTimeout(() => location.reload(), 1000); 
-        } else {
-            alert('Impossible d\'annuler : ' + data.message);
         }
-    })
-    .catch(error => console.error('Erreur undo:', error));
-}
+    });
+
+    // --- BOUTON ANNULER (DANS LE TOAST) ---
+    cancelBtn.addEventListener('click', function() {
+        clearInterval(timer); // Stop le temps
+        toast.hide();         // Cache la notif
+        
+        // On réactive le bouton sur lequel l'utilisateur avait cliqué
+        if (pendingButton) {
+            pendingButton.disabled = false;
+            pendingButton.innerHTML = '<i class="fas fa-check"></i>'; // On remet l'icône d'origine
+        }
+        
+        pendingFormData = null; // On vide la mémoire
+    });
+});
 </script>
 
 </body>
