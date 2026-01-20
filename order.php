@@ -338,5 +338,49 @@ $timeSlots = range(8, 17);
     ?>;
 </script>
 <script src="assets/js/main.js?v=<?php echo time(); ?>"></script>
+<script>
+    // Nouvelle fonction qui vérifie avant d'ajouter
+    async function checkAndAddRecipient() {
+        // Récupération des valeurs saisies
+        let nom = document.getElementById('dest_nom').value.trim();
+        let prenom = document.getElementById('dest_prenom').value.trim();
+        let idField = document.getElementById('dest_schedule_id');
+        let searchUsed = (idField.value !== "");
+
+        // Si l'utilisateur n'a pas utilisé la recherche (ID vide) mais a rempli les champs texte
+        if (!searchUsed && nom !== "" && prenom !== "") {
+            
+            // On désactive le bouton pour éviter le double clic
+            let btn = document.getElementById('btn-save-recipient');
+            let originalText = btn.innerText;
+            btn.disabled = true;
+            btn.innerText = "Vérification...";
+
+            try {
+                // Appel API pour voir si ça existe
+                const response = await fetch(`api/check_recipient_exists.php?nom=${encodeURIComponent(nom)}&prenom=${encodeURIComponent(prenom)}`);
+                const result = await response.json();
+
+                if (result.found) {
+                    // C'est le cas que tu voulais gérer !
+                    alert(`⚠️ Information :\n\nUne personne nommée "${result.data.nom} ${result.data.prenom}" (Classe : ${result.data.class_name}) existe déjà dans la base.\n\nNous allons lier votre commande à ce profil existant.\n\n(Cliquez sur OK pour valider).`);
+                    
+                    // On force l'ID dans le champ caché, comme si on avait fait une recherche
+                    idField.value = result.data.id;
+                }
+
+            } catch (error) {
+                console.error("Erreur vérification destinataire", error);
+            }
+
+            // On remet le bouton normal
+            btn.disabled = false;
+            btn.innerText = originalText;
+        }
+
+        // Quoi qu'il arrive (trouvé ou pas), on lance la fonction d'ajout classique
+        addRecipientToCart();
+    }
+</script>
 </body>
 </html>
