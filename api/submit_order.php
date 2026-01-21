@@ -7,6 +7,7 @@ error_reporting(E_ALL);
 session_start();
 require_once '../db.php'; 
 require_once '../mail_config.php'; 
+require_once '../logger.php';
 
 function sendError($msg) {
     http_response_code(400); 
@@ -219,6 +220,19 @@ try {
             $messageDisplay
         </li>";
     }
+
+    // =================================================================
+    // AJOUT TRACABILITÉ
+    // =================================================================
+    logAction(
+        $current_user_id, 
+        'order', 
+        $orderId, 
+        'ORDER_CREATED', 
+        null, 
+        ['total_price' => $totalOrderPrice, 'cart_snapshot' => $cart], 
+        "Commande créée par " . ($current_user_id >= 1000000 ? "Invité" : "Membre")
+    );
 
     $pdo->commit();
 
