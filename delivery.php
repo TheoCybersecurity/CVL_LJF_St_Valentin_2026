@@ -3,6 +3,7 @@
 require_once 'db.php';
 require_once 'auth_check.php'; 
 require_once 'mail_config.php';
+require_once 'logger.php';
 checkAccess('cvl');
 
 // ==============================================================================
@@ -24,9 +25,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                 // 1. Mise à jour de la base de données (Déjà existant)
                 $stmt = $pdo->prepare("UPDATE order_recipients SET is_distributed = 1, distributed_at = NOW(), distributed_by_cvl_id = ? WHERE id = ?");
                 $stmt->execute([$adminId, $id]);
+
+                // [LOG] AJOUTER ICI
+                logAction($adminId, 'order_recipient', $id, 'DISTRIBUTION_CONFIRMED', ['is_distributed' => 0], ['is_distributed' => 1], "Livraison confirmée (AJAX)");
                 
                 // ============================================================
-                // 2. ENVOI DU MAIL DE CONFIRMATION "LIVRÉ" (NOUVEAU)
+                // 2. ENVOI DU MAIL DE CONFIRMATION "LIVRÉ"
                 // ============================================================
                 try {
                     // Récupération des infos (Email acheteur + Noms)
@@ -98,6 +102,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             elseif (isset($_POST['unmark_distributed'])) {
                 $stmt = $pdo->prepare("UPDATE order_recipients SET is_distributed = 0, distributed_at = NULL, distributed_by_cvl_id = NULL WHERE id = ?");
                 $stmt->execute([$id]);
+
+                // [LOG] AJOUTER ICI
+                logAction($adminId, 'order_recipient', $id, 'DISTRIBUTION_CANCELLED', ['is_distributed' => 1], ['is_distributed' => 0], "Livraison annulée (AJAX)");
                 
                 $response = [
                     'success' => true, 
@@ -128,10 +135,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
 
         if ((isset($_POST['action']) && $_POST['action'] === 'mark_distributed')) {
             $pdo->prepare("UPDATE order_recipients SET is_distributed = 1, distributed_at = NOW(), distributed_by_cvl_id = ? WHERE id = ?")->execute([$adminId, $id]);
+            
+            // [LOG] AJOUTER ICI
+            logAction($adminId, 'order_recipient', $id, 'DISTRIBUTION_CONFIRMED', ['is_distributed' => 0], ['is_distributed' => 1], "Livraison confirmée");
+
             $actionType = 'marked';
         }
         elseif (isset($_POST['unmark_distributed'])) {
             $pdo->prepare("UPDATE order_recipients SET is_distributed = 0, distributed_at = NULL, distributed_by_cvl_id = NULL WHERE id = ?")->execute([$id]);
+            
+            // [LOG] AJOUTER ICI
+            logAction($adminId, 'order_recipient', $id, 'DISTRIBUTION_CANCELLED', ['is_distributed' => 1], ['is_distributed' => 0], "Livraison annulée");
+            
             $actionType = 'unmarked';
         }
 
