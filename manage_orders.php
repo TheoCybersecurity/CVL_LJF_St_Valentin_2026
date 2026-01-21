@@ -2,7 +2,8 @@
 // manage_orders.php
 require_once 'db.php';
 require_once 'auth_check.php'; 
-require_once 'mail_config.php'; // <--- AJOUT IMPORTANT POUR LES MAILS
+require_once 'mail_config.php';
+require_once 'logger.php';
 
 checkAccess('cvl');
 
@@ -32,6 +33,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // --- A. SUPPRESSION TOTALE COMMANDE ---
         if ($_POST['action'] === 'delete_order' && $orderId > 0) {
             $pdo->beginTransaction();
+
+            // [LOG] Capture de l'état avant suppression
+            $oldState = getOrderSnapshot($pdo, $orderId);
+
             // 1. Supprimer les roses
             $sqlRoses = "DELETE rr FROM recipient_roses rr 
                          INNER JOIN order_recipients ort ON rr.recipient_id = ort.id 
@@ -46,6 +51,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 3. Supprimer la commande
             $stmt = $pdo->prepare("DELETE FROM orders WHERE id = ?");
             $stmt->execute([$orderId]);
+
+            // [LOG] Enregistrement
+            logAction($_SESSION['user_id'], 'order', $orderId, 'ORDER_DELETED', $oldState, null, "Suppression définitive");
+
             $pdo->commit();
             $msgSuccess = "La commande #$orderId a été supprimée définitivement.";
         }
@@ -56,6 +65,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if ($recipientToDeleteId > 0) {
                 $pdo->beginTransaction();
+
+                // [LOG] On récupère infos du destinataire avant suppression
+                $stmtLog = $pdo->prepare("
+                    SELECT r.id, r.nom, r.prenom, r.class_id 
+                    FROM order_recipients ort
+                    JOIN recipients r ON ort.recipient_id = r.id
+                    WHERE ort.id = ?
+                ");
+                $stmtLog->execute([$recipientToDeleteId]);
+                $oldRecipientData = $stmtLog->fetch(PDO::FETCH_ASSOC);
+
                 $pdo->prepare("DELETE FROM recipient_roses WHERE recipient_id = ?")->execute([$recipientToDeleteId]);
                 $pdo->prepare("DELETE FROM order_recipients WHERE id = ?")->execute([$recipientToDeleteId]);
 
@@ -88,6 +108,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $pdo->prepare("UPDATE orders SET total_price = ? WHERE id = ?")->execute([$newTotalPrice, $orderId]);
                     $msgSuccess = "Destinataire supprimé. Nouveau total : " . number_format($newTotalPrice, 2) . " €";
                 }
+                $targetStudentId = $oldRecipientData['id'] ?? $recipientToDeleteId;
+                
+                logAction(
+                    $_SESSION['user_id'], 
+                    'recipient', 
+                    $recipientToDeleteId, 
+                    'RECIPIENT_DELETED', 
+                    $oldRecipientData, // Contient maintenant le bon Nom/Prénom
+                    null, 
+                    "Suppression destinataire depuis commande #$orderId"
+                );
                 $pdo->commit();
             }
         }
@@ -99,6 +130,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 1. Mise à jour de la base de données
             $stmt = $pdo->prepare("UPDATE orders SET is_paid = 1, paid_at = NOW(), paid_by_cvl_id = ? WHERE id = ?");
             $stmt->execute([$adminId, $orderId]);
+
+            // [LOG] Juste après l'execute SQL
+            logAction($_SESSION['user_id'], 'order', $orderId, 'PAYMENT_VALIDATED', ['is_paid' => 0], ['is_paid' => 1], "Paiement de la commande #$orderId validé");
             
             // 2. ENVOI DU MAIL DE CONFIRMATION
             try {
@@ -168,6 +202,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt = $pdo->prepare("UPDATE orders SET is_paid = 0, paid_at = NULL, paid_by_cvl_id = NULL WHERE id = ?");
             $stmt->execute([$orderId]);
 
+            // [LOG] Juste après l'execute SQL
+            logAction($_SESSION['user_id'], 'order', $orderId, 'PAYMENT_CANCELLED', ['is_paid' => 1], ['is_paid' => 0], "Annulation du paiement de la commande #$orderId");
+
             // 2. ENVOI DU MAIL D'ANNULATION
             try {
                 // On récupère les infos pour le mail
@@ -231,6 +268,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // --- E. UPDATE COMMANDE ---
         elseif ($_POST['action'] === 'update_order' && $orderId > 0) {
+            // [LOG] 1. Capture de l'état AVANT modif
+            $stateBefore = getOrderSnapshot($pdo, $orderId);
+
             $pdo->beginTransaction();
             $calculatedTotalPrice = 0.0;
 
@@ -324,6 +364,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // Update Prix Total
             $stmtPrice = $pdo->prepare("UPDATE orders SET total_price = ? WHERE id = ?");
             $stmtPrice->execute([$calculatedTotalPrice, $orderId]);
+
+            // [LOG] 2. Capture de l'état APRÈS modif
+            $stateAfter = getOrderSnapshot($pdo, $orderId);
+            
+            // [LOG] 3. Enregistrement (Uniquement si ça a changé)
+            if ($stateBefore != $stateAfter) {
+                logAction($_SESSION['user_id'], 'order', $orderId, 'ORDER_UPDATED', $stateBefore, $stateAfter, "Modification contenu commande");
+            }
 
             $pdo->commit();
             $msgSuccess = "Commande #$orderId modifiée avec succès.";
@@ -454,7 +502,53 @@ foreach ($raw_results as $row) {
         'is_stage_all_day' => $isStageAllDay
     ];
 }
+
+// =================================================================
+// FONCTION UTILITAIRE POUR LES LOGS (SNAPSHOT)
+// =================================================================
+function getOrderSnapshot($pdo, $orderId) {
+    // Infos Acheteur
+    $stmt = $pdo->prepare("SELECT u.nom, u.prenom, u.class_id, u.email FROM orders o JOIN users u ON o.user_id = u.user_id WHERE o.id = ?");
+    $stmt->execute([$orderId]);
+    $buyer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Infos Destinataires et Roses
+    $recipients = [];
+    $sql = "
+        SELECT 
+            ort.id as link_id,          -- ID unique de la ligne destinataire dans la commande
+            r.id as student_id,
+            r.nom, 
+            r.prenom, 
+            r.class_id,
+            ort.is_anonymous,           -- Info Anonyme
+            pm.content as message_text  -- Info Message
+        FROM order_recipients ort
+        JOIN recipients r ON ort.recipient_id = r.id
+        LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
+        WHERE ort.order_id = ?
+    ";
+    $stmtRec = $pdo->prepare($sql);
+    $stmtRec->execute([$orderId]);
+    
+    while ($row = $stmtRec->fetch(PDO::FETCH_ASSOC)) {
+        // On utilise link_id (l'ID dans order_recipients) car c'est lui qui est lié aux roses
+        $stmtRoses = $pdo->prepare("SELECT rose_product_id, quantity FROM recipient_roses WHERE recipient_id = ?");
+        $stmtRoses->execute([$row['link_id']]);
+        $roses = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
+        
+        // On nettoie un peu le tableau pour le log
+        $row['roses'] = $roses;
+        unset($row['link_id']); // On enlève l'ID technique, pas utile pour la lecture du log
+        
+        $recipients[] = $row;
+    }
+
+    return ['buyer' => $buyer, 'recipients' => $recipients];
+}
+
 ?>
+
 <!DOCTYPE html>
 <html lang="fr">
 <head>
