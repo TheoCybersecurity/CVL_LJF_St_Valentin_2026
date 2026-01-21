@@ -2,6 +2,7 @@
 // preparation.php
 require_once 'db.php';
 require_once 'auth_check.php';
+require_once 'logger.php';
 checkAccess('cvl');
 
 // --- 1. TRAITEMENT DES ACTIONS (POST) ---
@@ -38,6 +39,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
         if (isset($sql)) {
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
+
+            // =================================================================
+            // AJOUT TRACABILITÉ (PREPARATION)
+            // =================================================================
+            foreach ($ids as $giftId) {
+                // $giftId correspond à l'ID dans order_recipients
+                
+                if ($actionType === 'marked') {
+                    // Action : On vient de marquer comme PRÊT
+                    logAction(
+                        $currentCvlId, 
+                        'order_recipient', 
+                        $giftId, 
+                        'PREPARATION_CONFIRMED', 
+                        ['is_prepared' => 0], 
+                        ['is_prepared' => 1], 
+                        "Cadeau marqué comme prêt"
+                    );
+                } elseif ($actionType === 'unmarked') {
+                    // Action : On vient d'annuler (remis en attente)
+                    logAction(
+                        $currentCvlId, 
+                        'order_recipient', 
+                        $giftId, 
+                        'PREPARATION_CANCELLED', 
+                        ['is_prepared' => 1], 
+                        ['is_prepared' => 0], 
+                        "Cadeau remis en attente (non prêt)"
+                    );
+                }
+            }
 
             // --- DEBUT MODIFICATION AJAX ---
             if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
