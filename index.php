@@ -58,7 +58,9 @@ $isSalesOpen = $stmt->fetchColumn() == '1';
 <div class="container py-5">
     <div class="row mb-4 align-items-center">
         <div class="col-md-8">
-            <h1 class="display-6 fw-bold text-dark">Mon Tableau de Bord</h1>
+            <h1 class="display-6 fw-bold text-danger">
+                <i class="fas fa-heart me-2"></i>Mon Tableau de Bord
+            </h1>
             <p class="text-muted">Suivez l'état de vos commandes en temps réel.</p>
         </div>
         <div class="col-md-4 text-end">
