@@ -135,6 +135,9 @@ if ($view === 'global') {
         <div class="btn-group">
             <a href="?view=global" class="btn <?php echo $view === 'global' ? 'btn-dark' : 'btn-outline-dark'; ?>">Vue Globale</a>
             <a href="?view=timeline" class="btn <?php echo $view === 'timeline' ? 'btn-dark' : 'btn-outline-dark'; ?>">Chronologie</a>
+            <a href="audit_logs.php" class="btn btn-outline-danger ms-2" title="Logs techniques détaillés">
+                <i class="fas fa-shield-alt"></i> Audit Technique
+            </a>
         </div>
     </div>
 
