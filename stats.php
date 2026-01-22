@@ -593,7 +593,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const view = this.getAttribute('data-view');
                 container.style.opacity = '0.6';
                 
-                fetch('stats.php?ajax=1&view=' + view)
+                fetch('stats?ajax=1&view=' + view)
                     .then(response => response.text())
                     .then(html => {
                         container.innerHTML = html;
