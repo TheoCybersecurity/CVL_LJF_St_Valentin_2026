@@ -59,22 +59,6 @@ $rooms = $pdo->query("SELECT * FROM rooms ORDER BY name ASC")->fetchAll();
 $timeSlots = range(8, 17); 
 ?>
 
-<script>
-    const ROSE_PRICES = <?php echo json_encode($jsPriceTable); ?>;
-    function getPriceForQuantity(qty) {
-        qty = parseInt(qty);
-        if (qty <= 0) return 0;
-        if (ROSE_PRICES[qty]) {
-            return parseFloat(ROSE_PRICES[qty]);
-        } else {
-            let maxQty = Math.max(...Object.keys(ROSE_PRICES).map(Number));
-            let maxPrice = parseFloat(ROSE_PRICES[maxQty]);
-            let diff = qty - maxQty;
-            return maxPrice + (diff * 2.00); 
-        }
-    }
-</script>
-
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -98,6 +82,25 @@ $timeSlots = range(8, 17);
         .search-item:hover { background-color: #f8f9fa; color: #d63384; }
         .search-item small { display: block; color: #888; font-size: 0.8em; }
     </style>
+    
+    <script>
+        const ROSE_PRICES = <?php echo json_encode($jsPriceTable); ?>;
+        // Permet au JS de savoir si on est en mode invité ou non
+        const IS_GUEST = <?php echo ($is_logged_in ? 'false' : 'true'); ?>;
+
+        function getPriceForQuantity(qty) {
+            qty = parseInt(qty);
+            if (qty <= 0) return 0;
+            if (ROSE_PRICES[qty]) {
+                return parseFloat(ROSE_PRICES[qty]);
+            } else {
+                let maxQty = Math.max(...Object.keys(ROSE_PRICES).map(Number));
+                let maxPrice = parseFloat(ROSE_PRICES[maxQty]);
+                let diff = qty - maxQty;
+                return maxPrice + (diff * 2.00); 
+            }
+        }
+    </script>
 </head>
 <body class="bg-light">
 
@@ -194,7 +197,6 @@ $timeSlots = range(8, 17);
                 <input class="form-check-input" type="checkbox" id="terms_agree">
                 <label class="form-check-label small text-muted" for="terms_agree">
                     J'accepte de recevoir des notifications par email <strong>uniquement</strong> liées à l'opération St Valentin du CVL.
-                    <a href="#" class="text-decoration-underline" onclick="alert('Page de mentions légales à venir.'); return false;">(Voir mentions légales)</a>
                 </label>
             </div>
         </div>
@@ -326,6 +328,40 @@ $timeSlots = range(8, 17);
     </div>
 </div>
 
+<div class="modal fade" id="guestSuccessModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-success text-white border-0">
+                <h5 class="modal-title fw-bold"><i class="fas fa-check-circle me-2"></i>Commande Validée !</h5>
+            </div>
+            <div class="modal-body text-center p-4">
+                <div class="mb-3">
+                    <i class="fas fa-heart text-danger fa-4x animate__animated animate__pulse animate__infinite"></i>
+                </div>
+                <h4 class="text-success mb-3">Merci pour votre participation !</h4>
+                <p class="text-muted">
+                    Votre commande a bien été enregistrée. Un email récapitulatif vient de vous être envoyé.
+                </p>
+                
+                <div class="bg-light p-3 rounded mb-3 text-start border">
+                    <h6 class="fw-bold text-dark border-bottom pb-2 mb-2">Récapitulatif rapide :</h6>
+                    <p class="mb-1">👤 <strong>Destinataires :</strong> <span id="success-count">0</span> personne(s)</p>
+                    <p class="mb-0">💶 <strong>Total à régler :</strong> <span id="success-total" class="text-success fw-bold">0.00</span> €</p>
+                </div>
+
+                <div class="alert alert-info small text-start">
+                    <i class="fas fa-shield-alt me-1"></i>
+                    <strong>Sécurité :</strong> Aucune donnée sensible n'est stockée sur cet appareil. Vous pouvez quitter cette page en toute sécurité.
+                </div>
+            </div>
+            <div class="modal-footer justify-content-center border-0 bg-light">
+                <a href="welcome.php" class="btn btn-outline-secondary">Retour à l'accueil</a>
+                <button type="button" class="btn btn-success fw-bold px-4" onclick="location.reload()">Passer une autre commande</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     const classesMap = <?php 
@@ -339,46 +375,44 @@ $timeSlots = range(8, 17);
 </script>
 <script src="assets/js/main.js?v=<?php echo time(); ?>"></script>
 <script>
-    // Nouvelle fonction qui vérifie avant d'ajouter
+    // --- FONCTION APPELÉE PAR MAIN.JS EN CAS DE SUCCÈS (MODE INVITÉ) ---
+    function showGuestSuccessModal() {
+        // On récupère les valeurs affichées à l'écran juste avant de valider
+        const total = document.getElementById('grand-total').innerText;
+        const count = document.getElementById('count-people').innerText;
+        
+        // On met à jour le modal
+        document.getElementById('success-total').innerText = total;
+        document.getElementById('success-count').innerText = count;
+
+        // On affiche le modal
+        const myModal = new bootstrap.Modal(document.getElementById('guestSuccessModal'));
+        myModal.show();
+    }
+
     async function checkAndAddRecipient() {
-        // Récupération des valeurs saisies
+        // ... (Code de vérification existant conservé) ...
         let nom = document.getElementById('dest_nom').value.trim();
         let prenom = document.getElementById('dest_prenom').value.trim();
         let idField = document.getElementById('dest_schedule_id');
         let searchUsed = (idField.value !== "");
 
-        // Si l'utilisateur n'a pas utilisé la recherche (ID vide) mais a rempli les champs texte
         if (!searchUsed && nom !== "" && prenom !== "") {
-            
-            // On désactive le bouton pour éviter le double clic
             let btn = document.getElementById('btn-save-recipient');
             let originalText = btn.innerText;
             btn.disabled = true;
             btn.innerText = "Vérification...";
-
             try {
-                // Appel API pour voir si ça existe
                 const response = await fetch(`api/check_recipient_exists.php?nom=${encodeURIComponent(nom)}&prenom=${encodeURIComponent(prenom)}`);
                 const result = await response.json();
-
                 if (result.found) {
-                    // C'est le cas que tu voulais gérer !
-                    alert(`⚠️ Information :\n\nUne personne nommée "${result.data.nom} ${result.data.prenom}" (Classe : ${result.data.class_name}) existe déjà dans la base.\n\nNous allons lier votre commande à ce profil existant.\n\n(Cliquez sur OK pour valider).`);
-                    
-                    // On force l'ID dans le champ caché, comme si on avait fait une recherche
+                    alert(`⚠️ Information :\n\nUne personne nommée "${result.data.nom} ${result.data.prenom}" (Classe : ${result.data.class_name}) existe déjà dans la base.\n\nNous allons lier votre commande à ce profil existant.`);
                     idField.value = result.data.id;
                 }
-
-            } catch (error) {
-                console.error("Erreur vérification destinataire", error);
-            }
-
-            // On remet le bouton normal
+            } catch (error) { console.error("Erreur vérif", error); }
             btn.disabled = false;
             btn.innerText = originalText;
         }
-
-        // Quoi qu'il arrive (trouvé ou pas), on lance la fonction d'ajout classique
         addRecipientToCart();
     }
 </script>

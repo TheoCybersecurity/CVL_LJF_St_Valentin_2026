@@ -456,9 +456,30 @@ document.getElementById('btn-validate-order').addEventListener('click', function
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            // Redirection vers une page de succès
-            window.location.href = 'index.php?msg_success=Commande validée ! Un mail récapitulatif a été envoyé.'; 
+            // Vérification : Est-ce un invité ou un utilisateur connecté ?
+            if (typeof IS_GUEST !== 'undefined' && IS_GUEST === true) {
+                // --- CAS INVITÉ : On affiche la Pop-up ---
+                
+                // On change le texte du bouton pour confirmer visuellement
+                btn.innerHTML = "✅ Commande Validée";
+                // On laisse le bouton désactivé pour éviter de cliquer 2 fois
+                
+                // On lance la fonction définie dans order.php qui ouvre le Modal
+                if (typeof showGuestSuccessModal === 'function') {
+                    showGuestSuccessModal();
+                } else {
+                    // Sécurité au cas où la fonction n'est pas trouvée
+                    alert("Commande validée avec succès ! Un mail récapitulatif vous a été envoyé.");
+                    location.reload();
+                }
+
+            } else {
+                // --- CAS CONNECTÉ : On redirige vers le dashboard ---
+                window.location.href = 'index.php?msg_success=Commande validée ! Un mail récapitulatif a été envoyé.'; 
+            }
+
         } else {
+            // --- CAS ERREUR ---
             alert("Erreur Serveur : " + (data.message || "Erreur inconnue"));
             btn.disabled = false;
             btn.innerHTML = "✅ Valider la commande";
