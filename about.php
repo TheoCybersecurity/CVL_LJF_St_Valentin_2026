@@ -224,9 +224,16 @@ try {
 
     <div class="row mt-5">
         <div class="col-12 text-center border-top pt-4">
-            <p class="text-muted small mb-1">
+            <p class="text-muted small mb-2">
                 © 2026 Théo Marescal • Tous droits réservés.
             </p>
+            
+            <p class="mb-3">
+                <a href="privacy.php" class="text-muted text-decoration-underline small">
+                    <i class="fas fa-user-shield me-1"></i>Politique de Confidentialité & Données
+                </a>
+            </p>
+
             <p class="text-muted small fst-italic">
                 Développé avec passion et beaucoup de rigueur.
             </p>
