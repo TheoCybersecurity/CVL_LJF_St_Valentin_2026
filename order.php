@@ -188,7 +188,7 @@ $timeSlots = range(8, 17);
             <div class="mb-3">
                 <label for="buyer_email" class="form-label fw-bold">Votre adresse mail <span class="text-danger">*</span></label>
                 <input type="email" class="form-control" id="buyer_email" 
-                       placeholder="exemple@marescal.fr" 
+                       placeholder="exemple@gmail.com" 
                        value="<?php echo $is_logged_in && !empty($user_info['email']) ? htmlspecialchars($user_info['email']) : ''; ?>"
                        required>
             </div>
