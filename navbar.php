@@ -76,6 +76,11 @@ if ($nav_user_id) {
                                 <i class="fas fa-truck me-2 text-success"></i> Mode Distribution
                             </a>
                         </li>
+                        <li>
+                            <a class="dropdown-item" href="directory.php">
+                                <i class="fas fa-address-book me-2 text-info"></i> Annuaire du Lycée
+                            </a>
+                        </li>
                         
                         <?php if ($nav_role === 'admin'): ?>
                             <li><hr class="dropdown-divider"></li>
