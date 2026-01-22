@@ -27,7 +27,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                 $stmt->execute([$adminId, $id]);
 
                 // [LOG] AJOUTER ICI
-                logAction($adminId, 'order_recipient', $id, 'DISTRIBUTION_CONFIRMED', ['is_distributed' => 0], ['is_distributed' => 1], "Livraison confirmée (AJAX)");
+                logAction($adminId, 'order_recipient', $id, 'DISTRIBUTION_CONFIRMED', ['is_distributed' => 0], ['is_distributed' => 1], "Livraison confirmée");
                 
                 // ============================================================
                 // 2. ENVOI DU MAIL DE CONFIRMATION "LIVRÉ"
@@ -104,7 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                 $stmt->execute([$id]);
 
                 // [LOG] AJOUTER ICI
-                logAction($adminId, 'order_recipient', $id, 'DISTRIBUTION_CANCELLED', ['is_distributed' => 1], ['is_distributed' => 0], "Livraison annulée (AJAX)");
+                logAction($adminId, 'order_recipient', $id, 'DISTRIBUTION_CANCELLED', ['is_distributed' => 1], ['is_distributed' => 0], "Livraison annulée");
                 
                 $response = [
                     'success' => true, 
