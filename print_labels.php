@@ -25,17 +25,19 @@ $levelFilter = isset($_GET['level']) ? $_GET['level'] : 'all';
 
 $sql = "
     SELECT 
-        ort.id as unique_gift_id,  -- L'ID unique de l'étiquette
+        ort.id as unique_gift_id, 
         r.nom as dest_nom, 
         r.prenom as dest_prenom, 
         ort.is_anonymous, 
         pm.content as message_content,
         c.name as class_name,
         cl.group_alias, 
-        o.buyer_prenom, o.buyer_nom
+        u.prenom as buyer_prenom, -- On récupère le prénom depuis la table users
+        u.nom as buyer_nom        -- On récupère le nom depuis la table users
     FROM order_recipients ort
     JOIN recipients r ON ort.recipient_id = r.id
     JOIN orders o ON ort.order_id = o.id
+    JOIN users u ON o.user_id = u.user_id  -- <-- C'est ici que l'on fait le lien !
     LEFT JOIN classes c ON r.class_id = c.id
     LEFT JOIN class_levels cl ON c.level_id = cl.id
     LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
