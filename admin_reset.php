@@ -3,12 +3,15 @@
 require_once 'auth_check.php';
 require_once 'db.php';
 
+// Vérification standard Admin
 checkAccess('admin');
 
-// Sécurité supplémentaire : seul l'utilisateur avec l'ID 2 (Super Admin) peut accéder à cette page
-// Assurez-vous que votre ID est bien le 2, sinon changez ce chiffre.
+// --- SÉCURITÉ ULTIME ---
+// Seul l'utilisateur avec l'ID 2 (Théo/Super Admin) peut accéder à cette page.
+// Cela empêche un membre du CVL lambda de tout casser par erreur.
 $current_id = $_SESSION['user_id'] ?? $_SESSION['id'] ?? 0;
 if ($current_id != 2) {
+    // Redirection silencieuse ou message d'erreur
     header("Location: admin.php"); 
     exit; 
 }
@@ -19,36 +22,39 @@ $groups = [
     'orders' => [
         'title' => '📦 Commandes & Ventes (Opérationnel)',
         'icon' => 'fa-shopping-cart',
-        'desc' => 'Supprime toutes les commandes, les destinataires, les emplois du temps liés et les détails des roses.',
+        'desc' => 'Supprime toutes les commandes, les destinataires, les emplois du temps associés et le contenu des paniers.',
         'tables' => [
-            'recipient_roses'     => 'Détails des roses (Couleurs)',
-            'schedules'           => 'Emplois du temps (Table pivot)', // Mise à jour ici
-            'order_recipients'    => 'Liaison Commande-Élève (Etiquettes)',
-            'recipients'          => 'Élèves Destinataires (Infos brutes)', // Ajout important
-            'orders'              => 'Commandes (En-têtes)'
+            'recipient_roses'     => 'Détails des roses (Contenu panier)',
+            'order_recipients'    => 'Liaison Commande-Élève',
+            'schedules'           => 'Emplois du temps (Liés aux destinataires)',
+            'recipients'          => 'Destinataires (Infos élèves ciblés)',
+            'orders'              => 'Commandes (Facturation)'
         ]
     ],
     'logs' => [
-        'title' => '📜 Logs & Communications',
+        'title' => '📜 Logs & Historique',
         'icon' => 'fa-file-alt',
-        'desc' => 'Vide l\'historique des actions et les messages de contact.',
+        'desc' => 'Vide l\'historique de sécurité.',
         'tables' => [
-            // 'audit_logs'    => 'Logs d\'audit' // Décommentez si vous avez créé cette table
+            'audit_logs'          => 'Logs d\'audit (Actions admin/cvl)'
         ]
     ],
     'system' => [
-        'title' => '⚙️ Configuration (Structure Lycée)',
+        'title' => '⚙️ Structure Lycée & Catalogue',
         'icon' => 'fa-cogs',
         'class' => 'text-danger',
-        'desc' => '⚠️ DANGER : Supprime les classes, salles et bâtiments. À utiliser uniquement avant une réimportation CSV complète.',
+        'desc' => '⚠️ DANGER : Supprime les classes, salles, bâtiments et produits. À utiliser uniquement pour une remise à zéro totale.',
         'tables' => [
+            'users'               => 'Utilisateurs (Voir option spécifique plus bas)', // Pour info dans la liste interne
             'classes'             => 'Classes',
             'class_levels'        => 'Niveaux de classe',
             'rooms'               => 'Salles',
             'floors'              => 'Étages',
             'buildings'           => 'Bâtiments',
-            'rose_products'       => 'Catalogue (Produits)',
-            'predefined_messages' => 'Messages prédéfinis'
+            'rose_products'       => 'Catalogue (Types de roses)',
+            'roses_prices'        => 'Grille Tarifaire',
+            'predefined_messages' => 'Messages prédéfinis',
+            'global_settings'     => 'Paramètres globaux du site'
         ]
     ]
 ];
@@ -60,21 +66,26 @@ $message_type = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     $tables_to_clean = $_POST['tables'] ?? [];
-    $clean_users = isset($_POST['clean_users']);
+    $clean_users_only = isset($_POST['clean_users_only']);
 
-    if (!empty($tables_to_clean) || $clean_users) {
+    if (!empty($tables_to_clean) || $clean_users_only) {
         try {
-            // 1. Désactiver les vérifications de clés étrangères pour permettre le TRUNCATE
+            // 1. Désactiver les clés étrangères pour permettre le TRUNCATE brutal
             $pdo->exec("SET FOREIGN_KEY_CHECKS = 0"); 
 
             $count = 0;
 
-            // A. Traitement des tables classiques (TRUNCATE)
+            // A. Traitement des tables classiques sélectionnées
             foreach ($tables_to_clean as $table) {
-                // Vérification de sécurité : la table doit exister dans notre config
+                // Sécurité : on vérifie que la table est bien dans notre liste autorisée
                 $is_allowed = false;
                 foreach ($groups as $g) {
                     if (array_key_exists($table, $g['tables'])) $is_allowed = true;
+                }
+
+                // Cas particulier : on ne truncate pas 'users' ici si on a coché l'option spéciale élèves
+                if ($table === 'users' && $clean_users_only) {
+                    continue; 
                 }
 
                 if ($is_allowed) {
@@ -83,27 +94,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
 
-            // B. Traitement spécial Utilisateurs (DELETE intelligent)
-            if ($clean_users) {
-                // Supprime les utilisateurs qui n'ont pas le rôle 'admin' ou 'cvl'
-                // On suppose ici que la colonne 'role' existe dans project_users
-                // OU on utilise la logique de la table cvl_members si elle existe.
+            // B. Traitement Spécial : Nettoyage des Élèves (tout en gardant le CVL)
+            if ($clean_users_only) {
+                // Logique : On supprime de la table 'users' tous les ID qui NE SONT PAS dans 'cvl_members'
+                // Et on protège l'ID 2 (Super Admin) par double sécurité.
+                $sql = "DELETE FROM users 
+                        WHERE user_id NOT IN (SELECT user_id FROM cvl_members) 
+                        AND user_id != 2";
                 
-                // Option 1 : Si vous avez une table cvl_members
-                // $sql = "DELETE FROM project_users WHERE user_id NOT IN (SELECT user_id FROM cvl_members)";
-                
-                // Option 2 (Plus générique basée sur les rôles) :
-                $sql = "DELETE FROM users WHERE role NOT IN ('admin', 'cvl')";
-                
-                $stmt = $pdo->exec($sql);
-                $count++;
+                $stmt = $pdo->exec($sql); // Retourne le nombre de lignes supprimées
+                // $count++; // On ne compte pas ça comme une "table truncatée" mais c'est une action faite.
             }
 
-            // 2. Réactiver les Foreign Keys
+            // 2. Réactiver les clés étrangères
             $pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
 
-            $message = "<strong>Succès !</strong> La base de données a été nettoyée ($count tables/opérations traitées).";
+            $message = "<strong>Succès !</strong> La base de données a été nettoyée ($count tables réinitialisées).";
             $message_type = "success";
+
+            // Log de l'action dans audit_logs (si la table n'a pas été supprimée juste avant !)
+            if (!in_array('audit_logs', $tables_to_clean)) {
+                $details = "Tables: " . implode(', ', $tables_to_clean);
+                if ($clean_users_only) $details .= " + Users (Students only)";
+                
+                // Insertion manuelle rapide pour éviter les dépendances circulaires
+                $stmtLog = $pdo->prepare("INSERT INTO audit_logs (user_id, target_type, target_id, action, details, ip_address) VALUES (?, 'system', 0, 'DB_RESET', ?, ?)");
+                $stmtLog->execute([$current_id, $details, $_SERVER['REMOTE_ADDR']]);
+            }
 
         } catch (PDOException $e) {
             // En cas d'erreur, on tente de réactiver les FK quand même
@@ -157,8 +174,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
                 <div class="card-body">
                     <p class="text-muted mb-4">
-                        Cette page permet de remettre à zéro certaines parties de la base de données (par exemple après une phase de test).
-                        <br><strong class="text-danger">Note : Les actions sont irréversibles.</strong>
+                        Cette page permet de remettre à zéro certaines parties de la base de données.
+                        <br><strong class="text-danger"><i class="fas fa-exclamation-triangle"></i> Attention : Les actions sont irréversibles.</strong>
                     </p>
 
                     <form method="post" onsubmit="return confirm('Êtes-vous ABSOLUMENT sûr de vouloir supprimer ces données ? Cette action est irréversible.');">
@@ -167,7 +184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <h6 class="fw-bold text-primary border-bottom pb-2">
                                 <i class="fas <?php echo $groups['orders']['icon']; ?> me-2"></i><?php echo $groups['orders']['title']; ?>
                             </h6>
-                            <p class="small text-muted"><?php echo $groups['orders']['desc']; ?></p>
+                            <p class="small text-muted mb-2"><?php echo $groups['orders']['desc']; ?></p>
                             <div class="list-group">
                                 <?php foreach ($groups['orders']['tables'] as $tbl => $lbl): ?>
                                     <label class="list-group-item d-flex justify-content-between align-items-center">
@@ -188,10 +205,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <div class="list-group">
                                 <label class="list-group-item list-group-item-warning d-flex justify-content-between align-items-center">
                                     <div>
-                                        <input class="form-check-input me-2" type="checkbox" name="clean_users" value="1">
-                                        <strong>Supprimer les comptes Élèves uniquement</strong>
+                                        <input class="form-check-input me-2" type="checkbox" name="clean_users_only" value="1">
+                                        <strong>Supprimer uniquement les Élèves (Non-CVL)</strong>
                                         <div class="small text-muted mt-1">
-                                            Conserve les comptes Admin et CVL.
+                                            Conserve les comptes présents dans la table <code>cvl_members</code> et le Super Admin.
+                                            Supprime tous les autres inscrits.
                                         </div>
                                     </div>
                                     <span class="badge bg-warning text-dark font-monospace">users (filtre)</span>
@@ -221,10 +239,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <i class="fas <?php echo $groups['system']['icon']; ?> me-2"></i><?php echo $groups['system']['title']; ?>
                             </h6>
                             <div class="alert alert-danger py-2 small">
-                                <i class="fas fa-exclamation-triangle me-1"></i> Ne cochez ceci que si vous devez réimporter toute la structure du lycée via CSV.
+                                <i class="fas fa-exclamation-triangle me-1"></i> Ne cochez ceci que si vous devez réimporter toute la structure du lycée (CSV) ou reconfigurer le site de zéro.
                             </div>
                             <div class="list-group">
                                 <?php foreach ($groups['system']['tables'] as $tbl => $lbl): ?>
+                                    <?php if ($tbl === 'users') continue; // On gère users via l'option spéciale au dessus ?>
                                     <label class="list-group-item d-flex justify-content-between align-items-center bg-light">
                                         <div>
                                             <input class="form-check-input me-2" type="checkbox" name="tables[]" value="<?php echo $tbl; ?>">
