@@ -538,7 +538,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Ici on récupère le recipient_id pour masquer la ligne de l'élève
         const recipientId = formData.get('recipient_id');
 
-        fetch('delivery.php', {
+        fetch('delivery', {
             method: 'POST',
             body: formData
         })
@@ -634,7 +634,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             } else {
                 // Pour l'historique (Undo), on reload pour rafraîchir la liste
-                fetch('delivery.php', {
+                fetch('delivery', {
                     method: 'POST',
                     body: formData
                 })
