@@ -33,7 +33,9 @@ if ($nav_user_id) {
 
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm mb-4">
   <div class="container">
-    <a class="navbar-brand fw-bold text-danger brand-bounce" href="index.php">🌹 St Valentin 2026</a>
+    <a class="navbar-brand fw-bold text-danger brand-bounce" href="#" data-bs-toggle="modal" data-bs-target="#exitConfirmationModal">
+        🌹 St Valentin 2026
+    </a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
       <span class="navbar-toggler-icon"></span>
     </button>
@@ -110,6 +112,27 @@ if ($nav_user_id) {
     </div>
   </div>
 </nav>
+
+<div class="modal fade" id="exitConfirmationModal" tabindex="-1" aria-labelledby="exitModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-danger">
+            <div class="modal-header bg-danger-subtle text-danger">
+                <h5 class="modal-title" id="exitModalLabel">⚠️ Quitter le site ?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+            </div>
+            <div class="modal-body">
+                <p>Vous êtes sur le point de quitter l'application de commande <strong>St Valentin</strong> pour retourner vers le portail principal.</p>
+                <p class="mb-0 text-muted small"><i class="fas fa-exclamation-triangle"></i> Si vous avez une commande en cours non validée, elle sera perdue.</p>
+            </div>
+            <div class="modal-footer bg-light">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler / Rester</button>
+                <a href="https://projets.marescal.fr" class="btn btn-danger fw-bold">
+                    Quitter vers le portail <i class="fas fa-external-link-alt ms-1"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
 
 <style>
 /* --- ANIMATIONS DE BASE --- */
