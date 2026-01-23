@@ -33,8 +33,13 @@ if ($nav_user_id) {
 
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm mb-4">
   <div class="container">
-    <a class="navbar-brand fw-bold text-danger brand-bounce" href="#" data-bs-toggle="modal" data-bs-target="#exitConfirmationModal">
-        🌹 St Valentin 2026
+    <a class="navbar-brand fw-bold text-danger brand-bounce" 
+        href="#" 
+        id="brandLink" 
+        title="Retour au portail principal"
+        data-bs-toggle="modal" 
+        data-bs-target="#exitConfirmationModal">
+            🌹 St Valentin 2026
     </a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
       <span class="navbar-toggler-icon"></span>
@@ -133,6 +138,17 @@ if ($nav_user_id) {
         </div>
     </div>
 </div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function(){
+        var brandElement = document.getElementById('brandLink');
+        // On initialise le Tooltip manuellement
+        var tooltip = new bootstrap.Tooltip(brandElement, {
+            placement: 'bottom', // Le texte s'affiche en dessous
+            trigger: 'hover'     // Apparait au survol
+        });
+    });
+</script>
 
 <style>
 /* --- ANIMATIONS DE BASE --- */
