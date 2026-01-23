@@ -8,10 +8,8 @@ if (isset($_COOKIE['jwt'])) {
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Saint Valentin - Bienvenue</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <?php include 'head_imports.php'; ?>
     <style>
         body { background: linear-gradient(135deg, #fdfbfb 0%, #ebedee 100%); height: 100vh; display: flex; align-items: center; justify-content: center; }
         .card-welcome { max-width: 500px; width: 100%; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border-radius: 20px; overflow: hidden; }

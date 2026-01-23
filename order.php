@@ -62,12 +62,8 @@ $timeSlots = range(8, 17);
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nouvelle Commande - St Valentin</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="assets/css/style.css?v=<?php echo time(); ?>" rel="stylesheet">
+    <?php include 'head_imports.php'; ?>
     <style>
         .rose-card { border-left: 4px solid #d63384; background-color: #fff0f6; }
         .total-box { font-size: 1.5rem; font-weight: bold; color: #d63384; }
