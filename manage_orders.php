@@ -155,15 +155,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     
                     $body = "
                     <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px;'>
-                        <div style='background-color: #198754; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
+                        <div style='background-color: #d63384; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
                             <h1 style='margin: 0;'>Paiement Reçu ! ✅</h1>
                         </div>
                         <div style='padding: 20px; color: #333;'>
                             <p>Bonjour <strong>$prenom</strong>,</p>
                             <p>Bonne nouvelle ! Le CVL confirme la réception de votre paiement de <strong>$montant €</strong> pour la commande <strong>#$orderId</strong>.</p>
                             
-                            <div style='background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #198754;'>
-                                <p style='margin: 0;'>Vos roses sont désormais validées. Elles seront préparées et distribuées le jour de la Saint-Valentin.</p>
+                            <div style='background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #d63384;'>
+                                <p style='margin: 0;'>Vos roses sont désormais validées. Elles seront distribuées le Vendredi 13 Février.</p>
                             </div>
 
                             <p style='font-size: 0.9em; color: #666;'>
@@ -172,7 +172,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             </p>
                             
                             <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>
-                            <p style='font-size: 0.8em; color: #888; text-align: center;'>L'équipe du CVL.</p>
+                            <p style='font-size: 0.8em; color: #888; text-align: center;'>
+                                Ceci est un mail automatique. Merci de ne pas répondre.<br>
+                                L'équipe du CVL.
+                            </p>
                         </div>
                     </div>";
 
@@ -243,7 +246,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             </p>
                             
                             <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>
-                            <p style='font-size: 0.8em; color: #888; text-align: center;'>L'équipe du CVL.</p>
+                            <p style='font-size: 0.8em; color: #888; text-align: center;'>
+                                Ceci est un mail automatique. Merci de ne pas répondre.<br>
+                                L'équipe du CVL.
+                            </p>
                         </div>
                     </div>";
 
