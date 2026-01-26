@@ -256,7 +256,7 @@ try {
                 <div style='background-color: #fff0f6; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #d63384;'>
                     <h3 style='margin: 0; color: #d63384;'>À payer : " . number_format($totalOrderPrice, 2) . " €</h3>
                     <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Veuillez régler auprès du CVL pour valider la commande. Les paiements se font par <strong>espèce</strong> et par <strong>carte bancaire</strong> dans le hall de la <strong>Vie Scolaire</strong>.</p>
-                    <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Les paiements ne se feront que du <strong>9 au 11 février 2026 à toutes les pauses</strong> (10h, 12-14h, 16h)</p>
+                    <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Les paiements ne se feront que du <strong>2 au 6 février 2026</strong> uniquement de <strong>13h à 14h</strong>.</p>
                 </div>
 
                 <h3>Détail de vos envois :</h3>
