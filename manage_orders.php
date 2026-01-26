@@ -241,7 +241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
                     $body = "
                     <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px;'>
-                        <div style='background-color: #dc3545; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
+                        <div style='background-color: #d63384; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
                             <h1 style='margin: 0;'>Paiement Annulé ❌</h1>
                         </div>
                         <div style='padding: 20px; color: #333;'>
