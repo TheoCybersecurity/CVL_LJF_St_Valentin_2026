@@ -3,7 +3,7 @@
 require_once 'db.php';
 require_once 'auth_check.php';
 
-// On autorise CVL et ADMIN (à toi de voir si les élèves "staff" simple ont le droit)
+// On autorise CVL et ADMIN
 checkAccess('cvl');
 
 // =============================================================================
@@ -27,8 +27,24 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
         exit;
     }
 
-    // B. Historique des cadeaux REÇUS
-    // On récupère : ID commande, Acheteur, Message, État, Roses
+    // --- B. Récupération de l'emploi du temps (IDs des salles) ---
+    $stmtSched = $pdo->prepare("SELECT * FROM schedules WHERE recipient_id = ?");
+    $stmtSched->execute([$studentId]);
+    $schedule = $stmtSched->fetch(PDO::FETCH_ASSOC);
+
+    // --- C. (NOUVEAU) Création du dictionnaire des Salles (ID => Nom) ---
+    // On charge toutes les salles dans un tableau associatif pour traduire rapidement
+    $roomsMap = [];
+    if ($schedule) {
+        // On récupère ID et NOM de toutes les salles
+        $sqlRooms = "SELECT id, name FROM rooms";
+        $stmtRooms = $pdo->query($sqlRooms);
+        while ($row = $stmtRooms->fetch(PDO::FETCH_ASSOC)) {
+            $roomsMap[$row['id']] = $row['name'];
+        }
+    }
+
+    // D. Historique des cadeaux REÇUS
     $sqlGifts = "
         SELECT 
             ort.id as gift_id,
@@ -48,7 +64,7 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
     $stmtGifts->execute([$studentId]);
     $gifts = $stmtGifts->fetchAll(PDO::FETCH_ASSOC);
 
-    // Génération du HTML pour la Modale
+    // --- E. Génération du HTML pour la Modale ---
     ?>
     <div class="text-center mb-4">
         <h3 class="fw-bold text-primary mb-0"><?php echo htmlspecialchars($student['prenom'] . ' ' . $student['nom']); ?></h3>
@@ -56,8 +72,47 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
         <span class="badge bg-dark">Classe: <?php echo htmlspecialchars($student['class_name'] ?? 'Inconnue'); ?></span>
     </div>
 
-    <h5 class="border-bottom pb-2 mb-3"><i class="fas fa-gift"></i> Historique des Roses Reçues</h5>
+    <h5 class="border-bottom pb-2 mb-3 text-info"><i class="fas fa-calendar-alt"></i> Localisation (Vendredi 13 Février)</h5>
+    
+    <?php if ($schedule): ?>
+        <div class="table-responsive mb-4">
+            <table class="table table-bordered table-sm text-center">
+                <thead class="table-light">
+                    <tr>
+                        <th>08h</th><th>09h</th><th>10h</th><th>11h</th><th>12h</th>
+                        <th>13h</th><th>14h</th><th>15h</th><th>16h</th><th>17h</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <?php 
+                        $hours = ['h08', 'h09', 'h10', 'h11', 'h12', 'h13', 'h14', 'h15', 'h16', 'h17'];
+                        foreach ($hours as $h): 
+                            // 1. On récupère l'ID de la salle dans l'emploi du temps
+                            $roomId = $schedule[$h] ?? null;
+                            
+                            // 2. On traduit l'ID en Nom grâce à notre tableau $roomsMap
+                            // Si l'ID existe dans la map, on affiche le nom, sinon un tiret
+                            if ($roomId && isset($roomsMap[$roomId])) {
+                                $display = '<strong class="text-primary">' . htmlspecialchars($roomsMap[$roomId]) . '</strong>';
+                            } else {
+                                $display = '<span class="text-muted small">-</span>';
+                            }
+                        ?>
+                            <td><?php echo $display; ?></td>
+                        <?php endforeach; ?>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    <?php else: ?>
+        <div class="alert alert-warning py-2 mb-4">
+            <i class="fas fa-exclamation-triangle"></i> Aucun emploi du temps enregistré pour cet élève.
+        </div>
+    <?php endif; ?>
 
+    <h5 class="border-bottom pb-2 mb-3"><i class="fas fa-gift"></i> Historique des Roses Reçues</h5>
+    
     <?php if (empty($gifts)): ?>
         <div class="alert alert-info text-center">
             Cet élève n'a reçu aucune rose pour le moment.
@@ -76,8 +131,6 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
                 <tbody>
                     <?php foreach ($gifts as $gift): ?>
                         <?php
-                            // Récupérer le détail des roses pour ce cadeau spécifique
-                            // (On le fait ici pour simplifier, ou via une jointure plus haut)
                             $stmtRoses = $pdo->prepare("SELECT rr.quantity, rp.name FROM recipient_roses rr JOIN rose_products rp ON rr.rose_product_id = rp.id WHERE rr.recipient_id = ?");
                             $stmtRoses->execute([$gift['gift_id']]);
                             $rosesList = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
@@ -147,7 +200,6 @@ $results = [];
 
 if ($view === 'classes') {
     // VUE PAR CLASSE
-    // On récupère d'abord les classes qui correspondent à la recherche (ou toutes)
     $sqlClasses = "SELECT * FROM classes WHERE 1=1 ";
     $paramsC = [];
     
@@ -161,16 +213,6 @@ if ($view === 'classes') {
     $stmt = $pdo->prepare($sqlClasses);
     $stmt->execute($paramsC);
     $classes = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Pour chaque classe, on récupère les élèves (seulement si on n'a pas trop de classes affichées, sinon ça rame)
-    // Astuce : On récupère TOUS les élèves d'un coup et on trie en PHP pour éviter 50 requêtes SQL
-    $sqlAllStudents = "SELECT id, nom, prenom, class_id FROM recipients ORDER BY nom ASC";
-    $allStudents = $pdo->query($sqlAllStudents)->fetchAll(PDO::FETCH_GROUP | PDO::FETCH_ASSOC); 
-    // FETCH_GROUP regroupe par la 1ère colonne (mais ici l'ID est unique donc ce n'est pas idéal pour class_id)
-    
-    // On refait une requête propre : 
-    // On récupère les élèves dont la class_id est dans la liste des classes trouvées
-    // (Pour simplifier ici, on va faire une requête globale filtrée si recherche)
     
 } else {
     // VUE LISTE (DÉFAUT)
@@ -194,12 +236,8 @@ if ($view === 'classes') {
         $params = [$term, $term, $term, "%$search%", $term];
     }
     
-    // Pagination simple (limite 100 pour ne pas crasher le navigateur si pas de recherche)
-    if (empty($search)) {
-        $sql .= " ORDER BY r.nom ASC";
-    } else {
-        $sql .= " ORDER BY r.nom ASC";
-    }
+    // Tri par Nom
+    $sql .= " ORDER BY r.nom ASC";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
@@ -311,7 +349,6 @@ if ($view === 'classes') {
             <?php foreach ($classes as $cls): ?>
                 <?php 
                     // Récupération "lazy" des élèves de cette classe
-                    // Optimisation : On pourrait le faire en une seule grosse requête avant la boucle si c'est trop lent.
                     $stmtS = $pdo->prepare("SELECT * FROM recipients WHERE class_id = ? ORDER BY nom ASC");
                     $stmtS->execute([$cls['id']]);
                     $studentsInClass = $stmtS->fetchAll(PDO::FETCH_ASSOC);
@@ -393,7 +430,7 @@ if ($view === 'classes') {
             </div>`;
 
         // 3. Appel AJAX vers la même page
-        fetch('directory', {
+        fetch('directory', { // Assure-toi que c'est bien directory.php ici
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',

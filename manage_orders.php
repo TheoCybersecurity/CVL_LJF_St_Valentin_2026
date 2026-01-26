@@ -473,14 +473,14 @@ foreach ($raw_results as $row) {
     $schedRow = $stmtSchedule->fetch(PDO::FETCH_ASSOC);
 
     $scheduleMap = [];
-    $isStageAllDay = false; 
+    $isAbsent = false; 
 
     if ($schedRow) {
         $countStage = 0;
         foreach ($schedRow as $col => $roomId) {
             if ($roomId == 180) $countStage++;
         }
-        if ($countStage === 10) $isStageAllDay = true;
+        if ($countStage === 10) $isAbsent = true;
 
         foreach ($schedRow as $col => $roomId) {
             $hour = intval(substr($col, 1)); 
@@ -507,7 +507,7 @@ foreach ($raw_results as $row) {
         'distributed_at' => $row['distributed_at'],
         'roses' => $roses,
         'schedule_map' => $scheduleMap,
-        'is_stage_all_day' => $isStageAllDay
+        'is_absent' => $isAbsent
     ];
 }
 
@@ -764,8 +764,8 @@ function getOrderSnapshot($pdo, $orderId) {
                                             <div class="col-md-4 d-flex flex-column justify-content-center">
                                                 <strong class="small text-uppercase text-muted d-block mb-2">📍 Localisation</strong>
                                                 <?php 
-                                                if (isset($dest['is_stage_all_day']) && $dest['is_stage_all_day']) {
-                                                    echo "<div class='badge bg-info text-dark w-100 py-2'><i class='fas fa-briefcase me-1'></i> En stage</div>";
+                                                if (isset($dest['is_absent']) && $dest['is_absent']) {
+                                                    echo "<div class='badge bg-info text-dark w-100 py-2'><i class='fas fa-user-slash me-1'></i> Absent(e)</div>";
                                                 } else {
                                                     $hasSchedule = false;
                                                     echo '<div class="d-flex flex-wrap gap-1">';
