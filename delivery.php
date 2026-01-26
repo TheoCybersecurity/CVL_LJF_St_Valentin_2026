@@ -48,10 +48,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
                 // B. Boucle sur chaque cadeau pour update + mail individuel
                 foreach ($giftsToUpdate as $ortId) {
+                    $now = date('Y-m-d H:i:s');
                     
                     // 1. Update BDD
-                    $stmtUpdate = $pdo->prepare("UPDATE order_recipients SET is_distributed = 1, distributed_at = NOW(), distributed_by_cvl_id = ? WHERE id = ?");
-                    $stmtUpdate->execute([$adminId, $ortId]);
+                    $stmtUpdate = $pdo->prepare("UPDATE order_recipients SET is_distributed = 1, distributed_at = ?, distributed_by_cvl_id = ? WHERE id = ?");
+                    $stmtUpdate->execute([$now, $adminId, $ortId]);
                     $countUpdated++;
 
                     // Log
@@ -93,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                                     <div style='background-color: #f8f9fa; padding: 15px; border-left: 4px solid #d63384; margin: 20px 0; font-style: italic;'>
                                         Le destinataire a bien reçu sa surprise en main propre.
                                     </div>
-                                    
+
                                     <p>Merci d'avoir participé à l'opération Saint-Valentin du CVL !</p>
 
                                     <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>

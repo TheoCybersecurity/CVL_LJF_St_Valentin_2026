@@ -33,10 +33,12 @@ function logAction($userId, $targetType, $targetId, $action, $old = null, $new =
         $oldJson = (is_array($old) || is_object($old)) ? json_encode($old, JSON_UNESCAPED_UNICODE) : $old;
         $newJson = (is_array($new) || is_object($new)) ? json_encode($new, JSON_UNESCAPED_UNICODE) : $new;
 
+        $now = date('Y-m-d H:i:s');
+
         $stmt = $pdo->prepare("
             INSERT INTO audit_logs 
             (user_id, target_type, target_id, action, old_value, new_value, details, ip_address, user_agent, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
 
         $stmt->execute([
@@ -48,7 +50,8 @@ function logAction($userId, $targetType, $targetId, $action, $old = null, $new =
             $newJson, 
             $details, 
             $ipAddress,
-            $userAgent
+            $userAgent,
+            $now
         ]);
 
     } catch (Exception $e) {

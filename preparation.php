@@ -18,12 +18,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
         $inQuery = implode(',', array_fill(0, count($ids), '?'));
         
         if (isset($_POST['mark_prepared'])) {
+            $now = date('Y-m-d H:i:s');
+
             $sql = "UPDATE order_recipients 
                     SET is_prepared = 1, 
-                        prepared_at = NOW(), 
+                        prepared_at = ?, 
                         prepared_by_cvl_id = ? 
                     WHERE id IN ($inQuery)";
-            $params = array_merge([$currentCvlId], $ids);
+            $params = array_merge([$now, $currentCvlId], $ids);
             $actionType = 'marked';
             
         } elseif (isset($_POST['unmark_prepared'])) {

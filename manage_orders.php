@@ -126,10 +126,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // --- C. VALIDATION PAIEMENT (AVEC ENVOI DE MAIL) ---
         elseif ($_POST['action'] === 'validate_payment' && $orderId > 0) {
             $adminId = $_SESSION['user_id'] ?? null; 
+
+            $now = date('Y-m-d H:i:s');
             
             // 1. Mise à jour de la base de données
-            $stmt = $pdo->prepare("UPDATE orders SET is_paid = 1, paid_at = NOW(), paid_by_cvl_id = ? WHERE id = ?");
-            $stmt->execute([$adminId, $orderId]);
+            $stmt = $pdo->prepare("UPDATE orders SET is_paid = 1, paid_at = ?, paid_by_cvl_id = ? WHERE id = ?");
+            $stmt->execute([$now, $adminId, $orderId]);
 
             // [LOG] Juste après l'execute SQL
             logAction($_SESSION['user_id'], 'order', $orderId, 'PAYMENT_VALIDATED', ['is_paid' => 0], ['is_paid' => 1], "Paiement de la commande #$orderId validé");
