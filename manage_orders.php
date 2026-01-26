@@ -196,7 +196,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // Si c'est une requête AJAX
             if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                echo json_encode(['success' => true, 'is_paid' => true, 'date' => date('d/m H:i')]);
+                // 1. On calcule le nouveau nombre de commandes impayées
+                $stmtCount = $pdo->query("SELECT COUNT(*) FROM orders WHERE is_paid = 0");
+                $countUnpaid = $stmtCount->fetchColumn();
+
+                // 2. On l'ajoute dans la réponse JSON ('new_count')
+                echo json_encode([
+                    'success' => true, 
+                    'is_paid' => true, 
+                    'date' => date('d/m H:i'),
+                    'new_count' => $countUnpaid
+                ]);
                 exit;
             }
         } 
@@ -269,7 +279,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // Si c'est une requête AJAX
             if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                echo json_encode(['success' => true, 'is_paid' => false]);
+                // 1. On calcule le nouveau nombre
+                $stmtCount = $pdo->query("SELECT COUNT(*) FROM orders WHERE is_paid = 0");
+                $countUnpaid = $stmtCount->fetchColumn();
+
+                // 2. On l'ajoute dans la réponse JSON
+                echo json_encode([
+                    'success' => true, 
+                    'is_paid' => false,
+                    'new_count' => $countUnpaid
+                ]);
                 exit;
             }
         }
@@ -619,7 +638,10 @@ function getOrderSnapshot($pdo, $orderId) {
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <div>
                             <h6 class="text-muted text-uppercase mb-1" style="font-size: 0.8rem;">En attente paiement</h6>
-                            <h2 class="fw-bold mb-0 text-dark"><?php echo $countUnpaid; ?> <small class="text-muted fs-6">commandes</small></h2>
+                            <h2 class="fw-bold mb-0 text-dark">
+                                <span id="unpaid-counter"><?php echo $countUnpaid; ?></span> 
+                                <small class="text-muted fs-6">commandes</small>
+                            </h2>
                         </div>
                         <div class="text-<?php echo ($countUnpaid > 0) ? 'warning' : 'success'; ?>"><i class="fas fa-exclamation-circle fa-2x"></i></div>
                     </div>
@@ -735,12 +757,20 @@ function getOrderSnapshot($pdo, $orderId) {
                                                     <?php if($dest['is_anonymous']): ?><span class="badge bg-dark" title="Anonyme"><i class="fas fa-user-secret"></i></span><?php endif; ?>
                                                 </div>
                                                 <div class="mb-3"><span class="badge bg-info text-dark"><i class="fas fa-graduation-cap me-1"></i><?php echo htmlspecialchars($dest['class_name'] ?? '?'); ?></span></div>
-                                                <?php 
-                                                if (!$order['info']['is_paid']) echo '<div class="alert alert-danger py-1 px-2 mb-0 small"><i class="fas fa-hand-holding-usd me-2"></i> À payer</div>';
-                                                elseif ($dest['is_distributed']) echo '<div class="alert alert-success py-1 px-2 mb-0 small"><i class="fas fa-check-circle me-2"></i> Distribué</div>';
-                                                elseif ($dest['is_prepared']) echo '<div class="alert alert-info py-1 px-2 mb-0 small text-dark"><i class="fas fa-truck me-2"></i> Prêt</div>';
-                                                else echo '<div class="alert alert-warning py-1 px-2 mb-0 small text-dark"><i class="fas fa-box-open me-2"></i> À préparer</div>';
-                                                ?>
+                                                <div id="status-label-<?php echo $order['info']['id']; ?>">
+                                                    <?php 
+                                                    if (!$order['info']['is_paid']) {
+                                                        echo '<div class="alert alert-danger py-1 px-2 mb-0 small"><i class="fas fa-hand-holding-usd me-2"></i> À payer</div>';
+                                                    } elseif ($dest['is_distributed']) {
+                                                        // Note : Si tu es dans une boucle de destinataires, attention, ce code ne mettra à jour que le statut global
+                                                        echo '<div class="alert alert-success py-1 px-2 mb-0 small"><i class="fas fa-check-circle me-2"></i> Distribué</div>';
+                                                    } elseif ($dest['is_prepared']) {
+                                                        echo '<div class="alert alert-info py-1 px-2 mb-0 small text-dark"><i class="fas fa-truck me-2"></i> Prêt</div>';
+                                                    } else {
+                                                        echo '<div class="alert alert-warning py-1 px-2 mb-0 small text-dark"><i class="fas fa-box-open me-2"></i> À préparer</div>';
+                                                    }
+                                                    ?>
+                                                </div>
                                             </div>
                                             <div class="col-md-4 border-end-md d-flex flex-column justify-content-center">
                                                 <div class="d-flex flex-column gap-2 mb-2">
@@ -950,8 +980,14 @@ document.addEventListener('DOMContentLoaded', function() {
     // Fonction pour envoyer la requête AJAX
     function runAjax(formData) {
         const orderId = formData.get('order_id');
+        
+        // 1. Les éléments visuels de la carte
         const headerEl = document.getElementById('order-header-' + orderId);
         const boxEl = document.getElementById('payment-box-' + orderId);
+        const statusLabelEl = document.getElementById('status-label-' + orderId); // L'étiquette qu'on vient de créer
+        
+        // 2. Le compteur global en haut de page
+        const totalBadgeEl = document.getElementById('unpaid-counter');
 
         fetch('manage_orders', {
             method: 'POST',
@@ -960,42 +996,58 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
+                
+                // --- A. MISE À JOUR DU COMPTEUR GLOBAL ---
+                if (data.new_count !== undefined && totalBadgeEl) {
+                    totalBadgeEl.innerText = data.new_count;
+                    // Animation simple (optionnel)
+                    totalBadgeEl.classList.add('pulse-anim'); // Si tu as une anim CSS
+                }
+
+                // --- B. MISE À JOUR DE LA CARTE ---
                 if (data.is_paid) {
-                    // Visuel : PAYÉ
+                    // 1. Header Vert
                     headerEl.classList.remove('bg-warning', 'text-dark');
                     headerEl.classList.add('bg-success', 'text-white');
                     
+                    // 2. Étiquette : Devient "À préparer" (On suppose qu'après paiement, c'est l'étape suivante)
+                    if (statusLabelEl) {
+                        statusLabelEl.innerHTML = '<div class="alert alert-warning py-1 px-2 mb-0 small text-dark"><i class="fas fa-box-open me-2"></i> À préparer</div>';
+                    }
+
+                    // 3. Boite de boutons
                     boxEl.innerHTML = `
                         <div class="alert alert-success py-1 px-2 mb-2 small d-flex align-items-center justify-content-center">
                             <i class="fas fa-check-circle me-1"></i> 
                             <span>Payé le ${data.date}</span>
                         </div>
-                        <form method="POST" class="ajax-form" onsubmit="return confirm('⚠️ Attention : Annuler le paiement ?');">
+                        <form method="POST" class="ajax-form" onsubmit="return confirm('⚠️ Annuler le paiement ?');">
                             <input type="hidden" name="action" value="cancel_payment">
                             <input type="hidden" name="order_id" value="${orderId}">
-                            <button type="submit" class="btn btn-outline-danger btn-sm w-100" style="font-size: 0.8rem;">
-                                Annuler paiement
-                            </button>
+                            <button type="submit" class="btn btn-outline-danger btn-sm w-100" style="font-size: 0.8rem;">Annuler</button>
                         </form>
                     `;
                 } else {
-                    // Visuel : IMPAYÉ
+                    // 1. Header Jaune
                     headerEl.classList.remove('bg-success', 'text-white');
                     headerEl.classList.add('bg-warning', 'text-dark');
 
+                    // 2. Étiquette : Redevient "À payer"
+                    if (statusLabelEl) {
+                        statusLabelEl.innerHTML = '<div class="alert alert-danger py-1 px-2 mb-0 small"><i class="fas fa-hand-holding-usd me-2"></i> À payer</div>';
+                    }
+
+                    // 3. Boite de boutons
                     boxEl.innerHTML = `
                         <form method="POST" class="ajax-form">
                             <input type="hidden" name="action" value="validate_payment">
                             <input type="hidden" name="order_id" value="${orderId}">
-                            <button type="submit" class="btn btn-danger w-100 fw-bold shadow-sm pulse-button">
+                            <button type="submit" class="btn btn-danger w-100 fw-bold shadow-sm">
                                 <i class="fas fa-hand-holding-dollar me-1"></i> Encaisser
                             </button>
                         </form>
                     `;
                 }
-            } else {
-                console.error("Erreur serveur:", data);
-                alert("Une erreur est survenue.");
             }
         })
         .catch(error => console.error('Erreur:', error));
