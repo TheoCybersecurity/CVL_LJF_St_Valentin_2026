@@ -2,13 +2,6 @@
 // privacy.php
 session_start();
 require_once 'db.php';
-require_once 'auth_check.php';
-
-// Vérification basique : être connecté
-if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php");
-    exit();
-}
 ?>
 
 <!DOCTYPE html>
