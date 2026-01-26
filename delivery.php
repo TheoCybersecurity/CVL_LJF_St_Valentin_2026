@@ -84,18 +84,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                             
                             $body = "
                             <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px;'>
-                                <div style='background-color: #198754; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
+                                <div style='background-color: #d63384; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
                                     <h1 style='margin: 0;'>Mission Accomplie ! 🚀</h1>
                                 </div>
                                 <div style='padding: 20px; color: #333;'>
-                                    <p>Salut <strong>$buyerName</strong>,</p>
+                                    <p>Bonjour <strong>$buyerName</strong>,</p>
                                     <p>Bonne nouvelle : ta commande pour <strong>$destName</strong> vient d'être distribuée ! 🌹</p>
-                                    <div style='background-color: #f8f9fa; padding: 15px; border-left: 4px solid #198754; margin: 20px 0; font-style: italic;'>
+                                    <div style='background-color: #f8f9fa; padding: 15px; border-left: 4px solid #d63384; margin: 20px 0; font-style: italic;'>
                                         Le destinataire a bien reçu sa surprise en main propre.
                                     </div>
+                                    
                                     <p>Merci d'avoir participé à l'opération Saint-Valentin du CVL !</p>
+
                                     <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>
-                                    <p style='font-size: 0.8em; color: #888; text-align: center;'>L'équipe du CVL.</p>
+                                    <p style='font-size: 0.8em; color: #888; text-align: center;'>
+                                        Ceci est un mail automatique. Merci de ne pas répondre.<br>
+                                        L'équipe du CVL.
+                                    </p>
                                 </div>
                             </div>";
 
