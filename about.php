@@ -112,7 +112,7 @@ try {
                     Titulaire d'un <strong>BTS CIEL</strong> (Cybersécurité, Informatique & Réseaux, Électronique) et préparant actuellement un <strong>Titre Pro AIS</strong>, j'ai conçu ce site comme une application concrète de mes compétences professionnelles, pour m'exercer sur un cas réel avec de vrais utilisateurs.
                 </p>
                 <p>
-                    J'ai passé environ <strong>50 heures</strong> sur la conception. Ce site s'inscrit dans une démarche plus large : je regroupe d'ailleurs l'ensemble de mes développements et infrastructures sur mon portfolio personnel, <strong>projets.marescal.fr</strong>, qui témoigne de mon évolution technique.
+                    J'ai passé environ <strong>70 heures</strong> sur la conception. Ce site s'inscrit dans une démarche plus large : je regroupe d'ailleurs l'ensemble de mes développements et infrastructures sur mon portfolio personnel, <strong>projets.marescal.fr</strong>, qui témoigne de mon évolution technique.
                 </p>
 
                 <div class="mt-3 mb-4">

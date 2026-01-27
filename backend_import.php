@@ -51,8 +51,8 @@ function getRoomId($pdo, $roomName) {
 
     if (stripos($roomName, 'NSI-SNT-GT') !== false || stripos($roomName, 'Salle Info') !== false) {
         $cleanName = 'Salle Info NSI-SNT';
-    } elseif (stripos($roomName, 'Stage') !== false) {
-        $cleanName = 'Stage';
+    } elseif (stripos($roomName, 'Absent(e)') !== false) {
+        $cleanName = 'Absent(e)';
     } else {
         if (preg_match('/^([A-Z0-9]+)/', $roomName, $matches)) $cleanName = $matches[1];
         $shortCodeAliases = ['G8' => 'G08', 'G9' => 'G09'];
@@ -265,10 +265,10 @@ if ($action === 'process') {
             }
         }
 
-        // 3. STAGE
+        // 3. ABSENCE
         if (empty($heures)) {
-            $stageRoomId = getRoomId($pdo, 'Stage');
-            for ($h=8; $h<=17; $h++) $heures[$h] = $stageRoomId;
+            $AbsentRoomId = getRoomId($pdo, 'Absent(e)');
+            for ($h=8; $h<=17; $h++) $heures[$h] = $AbsentRoomId;
         }
 
         // 4. SQL COMPARE & UPSERT

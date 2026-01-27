@@ -495,11 +495,11 @@ foreach ($raw_results as $row) {
     $isAbsent = false; 
 
     if ($schedRow) {
-        $countStage = 0;
+        $countAbsent = 0;
         foreach ($schedRow as $col => $roomId) {
-            if ($roomId == 180) $countStage++;
+            if ($roomId == 180) $countAbsent++;
         }
-        if ($countStage === 10) $isAbsent = true;
+        if ($countAbsent === 10) $isAbsent = true;
 
         foreach ($schedRow as $col => $roomId) {
             $hour = intval(substr($col, 1)); 
