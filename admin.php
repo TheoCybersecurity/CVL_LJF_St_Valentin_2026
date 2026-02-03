@@ -127,6 +127,21 @@ checkAccess('admin');
         </div>
 
         <div class="col-md-4">
+            <a href="admin_emails.php" class="block-link">
+                <div class="card shadow h-100 text-center hover-card">
+                    <div class="card-body">
+                        <div class="text-indigo mb-3">
+                            <i class="fas fa-paper-plane fa-4x"></i>
+                        </div>
+                        <h3 class="card-title fw-bold">Emails & Rappels</h3>
+                        <p class="card-text text-muted">Envoyer les rappels d'impayés et les messages d'info aux élèves.</p>
+                        <div class="btn btn-outline-secondary w-100 rounded-pill">Campagnes Email</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+
+        <div class="col-md-4">
             <a href="admin_reset.php" class="block-link">
                 <div class="card shadow h-100 text-center hover-card">
                     <div class="card-body">
