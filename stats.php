@@ -46,50 +46,114 @@ $nbUnpaid = $stmtUnpaid->fetchColumn();
 $totalOrders = $nbPaid + $nbUnpaid;
 $percentPaid = ($totalOrders > 0) ? round(($nbPaid / $totalOrders) * 100) : 0;
 
-// --- STATS "VUE D'ENSEMBLE" (NOUVEAU) ---
+// --- 1. STATS "VUE D'ENSEMBLE" & ANALYSE ---
 
-// 1. Manque à gagner (Non payé)
+// Manque à gagner (Non payé)
 $stmtLost = $pdo->query("SELECT SUM(total_price) FROM orders WHERE is_paid = 0");
 $potentialRevenue = $stmtLost->fetchColumn() ?: 0;
 
-// 2. Plus grosse commande
-$stmtMax = $pdo->query("SELECT MAX(total_price) FROM orders WHERE is_paid = 1");
+// Plus grosse commande
+$stmtMax = $pdo->query("SELECT MAX(total_price) FROM orders");
 $biggestOrder = $stmtMax->fetchColumn() ?: 0;
 
-// 3. Le Casanova (Celui qui envoie à le plus de destinataires différents)
+// Le Casanova (Celui qui envoie à le plus de destinataires différents)
 $casanovaName = "N/A";
 $casanovaCount = 0;
 try {
-    // On cherche l'utilisateur qui a le plus de recipient_id distincts dans ses commandes payées
     $sqlCasanova = "SELECT u.prenom, u.nom, COUNT(DISTINCT orc.recipient_id) as count 
                     FROM orders o 
                     JOIN users u ON o.user_id = u.user_id 
                     JOIN order_recipients orc ON o.id = orc.order_id 
-                    WHERE o.is_paid = 1 
                     GROUP BY u.user_id 
                     ORDER BY count DESC 
                     LIMIT 1";
     $casanova = $pdo->query($sqlCasanova)->fetch(PDO::FETCH_ASSOC);
     if ($casanova) {
-        $casanovaName = $casanova['prenom'] . ' ' . substr($casanova['nom'], 0, 1) . '.';
+        $casanovaName = htmlspecialchars($casanova['prenom'] . ' ' . substr($casanova['nom'], 0, 1) . '.');
         $casanovaCount = $casanova['count'];
     }
 } catch (Exception $e) {}
 
 
+// --- 2. STATS ROSES & COULEURS (Corrigé) ---
+
+// A. Répartition par couleurs (TOTAL ABSOLU - Pour la commande fleuriste)
+$statsColors = [];
+try {
+    $sqlColors = "SELECT p.name, SUM(rr.quantity) as count 
+                  FROM recipient_roses rr 
+                  JOIN rose_products p ON rr.rose_product_id = p.id 
+                  JOIN order_recipients orc ON rr.recipient_id = orc.id 
+                  JOIN orders o ON orc.order_id = o.id 
+                  GROUP BY p.id 
+                  ORDER BY count DESC";
+    $statsColors = $pdo->query($sqlColors)->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) { $statsColors = []; }
+
+// B. Total Roses (Absolu)
+$totalRoses = 0;
+foreach ($statsColors as $c) { $totalRoses += $c['count']; }
+
+// C. Total Roses Vendues (PAYÉES UNIQUEMENT - Pour les stats financières)
+$totalRosesVendues = 0;
+try {
+    $sqlPaidRoses = "SELECT SUM(rr.quantity) 
+                     FROM recipient_roses rr 
+                     JOIN order_recipients orc ON rr.recipient_id = orc.id 
+                     JOIN orders o ON orc.order_id = o.id";
+    $totalRosesVendues = $pdo->query($sqlPaidRoses)->fetchColumn() ?: 0;
+} catch (Exception $e) { $totalRosesVendues = 0; }
+
+// D. Panier moyen (Roses vendues / Commandes payées)
+// Sécurité : on s'assure que $nbPaid est défini (au cas où il manquerait plus haut)
+if (!isset($nbPaid)) {
+    $nbPaid = $pdo->query("SELECT COUNT(*) FROM orders WHERE")->fetchColumn();
+}
+$avgBasket = ($nbPaid > 0) ? number_format($totalRosesVendues / $nbPaid, 1) : 0;
+
+
+// --- 3. NOUVELLES STATS (Acheteurs & Classe) ---
+
+// Acheteurs uniques (Combien d'élèves différents ont commandé ?)
+$uniqueBuyers = 0;
+try {
+    $uniqueBuyers = $pdo->query("SELECT COUNT(DISTINCT user_id) FROM orders")->fetchColumn();
+} catch (Exception $e) { $uniqueBuyers = 0; }
+
+// Top Classe (Quelle classe a le plus de commandes ?)
+$topClassName = "Aucune";
+$topClassCount = 0;
+try {
+    // On utilise c.id pour la jointure, comme dans ton code sqlClasses
+    $sqlTopClass = "SELECT c.name, COUNT(o.id) as order_count 
+                    FROM orders o 
+                    JOIN users u ON o.user_id = u.user_id 
+                    JOIN classes c ON u.class_id = c.id 
+                    GROUP BY c.id 
+                    ORDER BY order_count DESC 
+                    LIMIT 1";
+    $stmtTopClass = $pdo->query($sqlTopClass);
+    $topClassData = $stmtTopClass->fetch(PDO::FETCH_ASSOC);
+    
+    if ($topClassData) {
+        $topClassName = htmlspecialchars($topClassData['name']);
+        $topClassCount = $topClassData['order_count'];
+    }
+} catch (Exception $e) { }
+
 // --- POPULATION ---
 // Nombre d'acheteurs uniques
-$sqlBuyers = "SELECT COUNT(DISTINCT user_id) FROM orders WHERE is_paid = 1";
+$sqlBuyers = "SELECT COUNT(DISTINCT user_id) FROM orders";
 $nbUniqueBuyers = $pdo->query($sqlBuyers)->fetchColumn() ?: 0;
 
 // Nombre de destinataires uniques
-$sqlRecipients = "SELECT COUNT(DISTINCT orc.recipient_id) FROM order_recipients orc JOIN orders o ON orc.order_id = o.id WHERE o.is_paid = 1";
+$sqlRecipients = "SELECT COUNT(DISTINCT orc.recipient_id) FROM order_recipients orc JOIN orders o ON orc.order_id = o.id";
 $nbUniqueRecipients = $pdo->query($sqlRecipients)->fetchColumn() ?: 0;
 
 
 // --- LOGISTIQUE ---
 try {
-    $sqlTotal = "SELECT COUNT(orc.id) FROM order_recipients orc JOIN orders o ON orc.order_id = o.id WHERE o.is_paid = 1";
+    $sqlTotal = "SELECT COUNT(orc.id) FROM order_recipients orc JOIN orders o ON orc.order_id = o.id";
     $totalPaquets = $pdo->query($sqlTotal)->fetchColumn() ?: 0; // Nombre de paquets à livrer
 
     $sqlPrep = "SELECT COUNT(orc.id) FROM order_recipients orc JOIN orders o ON orc.order_id = o.id WHERE orc.is_prepared = 1 AND o.is_paid = 1";
@@ -107,35 +171,61 @@ try {
 // --- COULEURS & TOTAL ROSES ---
 $statsColors = [];
 try {
-    $sqlColors = "SELECT p.name, SUM(rr.quantity) as count FROM recipient_roses rr JOIN rose_products p ON rr.rose_product_id = p.id JOIN order_recipients orc ON rr.recipient_id = orc.id JOIN orders o ON orc.order_id = o.id WHERE o.is_paid = 1 GROUP BY p.id ORDER BY count DESC";
+    $sqlColors = "SELECT p.name, SUM(rr.quantity) as count 
+                  FROM recipient_roses rr 
+                  JOIN rose_products p ON rr.rose_product_id = p.id 
+                  JOIN order_recipients orc ON rr.recipient_id = orc.id 
+                  JOIN orders o ON orc.order_id = o.id 
+                  GROUP BY p.id 
+                  ORDER BY count DESC";
     $statsColors = $pdo->query($sqlColors)->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $statsColors = []; }
 
+$totalRoses = 0;
+foreach ($statsColors as $c) { $totalRoses += $c['count']; }
+
+
+// --- TOTAL ROSES VENDUES ---
 $totalRosesVendues = 0;
-foreach ($statsColors as $c) { $totalRosesVendues += $c['count']; }
+try {
+    $sqlPaidRoses = "SELECT SUM(rr.quantity) 
+                     FROM recipient_roses rr 
+                     JOIN order_recipients orc ON rr.recipient_id = orc.id 
+                     JOIN orders o ON orc.order_id = o.id 
+                     WHERE o.is_paid = 1";
+    
+    $totalRosesVendues = $pdo->query($sqlPaidRoses)->fetchColumn();
+
+    if (!$totalRosesVendues) { $totalRosesVendues = 0; }
+
+} catch (Exception $e) { $totalRosesVendues = 0; }
+
+
+// --- PANIER MOYEN (Roses payées / Nombre de commandes payées) ---
+// On utilise bien $totalRosesVendues ici
 $avgBasket = ($nbPaid > 0) ? number_format($totalRosesVendues / $nbPaid, 1) : 0;
 
 // --- ANONYMAT & STARS ---
 try {
-    $sqlAnon = "SELECT COUNT(orc.id) FROM order_recipients orc JOIN orders o ON orc.order_id = o.id WHERE orc.is_anonymous = 1 AND o.is_paid = 1";
+    $sqlAnon = "SELECT COUNT(orc.id) FROM order_recipients orc JOIN orders o ON orc.order_id = o.id WHERE orc.is_anonymous = 1";
     $nbAnon = $pdo->query($sqlAnon)->fetchColumn() ?: 0;
     $percentAnon = ($totalPaquets > 0) ? round(($nbAnon / $totalPaquets) * 100) : 0;
 
-    $sqlStars = "SELECT MAX(r.prenom) as prenom, MAX(r.nom) as nom, SUM(rr.quantity) as count FROM recipient_roses rr JOIN order_recipients orc ON rr.recipient_id = orc.id JOIN recipients r ON orc.recipient_id = r.id JOIN orders o ON orc.order_id = o.id WHERE o.is_paid = 1 GROUP BY r.id ORDER BY count DESC LIMIT 3";
+    $sqlStars = "SELECT MAX(r.prenom) as prenom, MAX(r.nom) as nom, SUM(rr.quantity) as count FROM recipient_roses rr JOIN order_recipients orc ON rr.recipient_id = orc.id JOIN recipients r ON orc.recipient_id = r.id JOIN orders o ON orc.order_id = o.id GROUP BY r.id ORDER BY count DESC LIMIT 5";
     $topStars = $pdo->query($sqlStars)->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $nbAnon = 0; $percentAnon = 0; $topStars = []; }
 
 // --- MESSAGES & CLASSES ---
 $topMessages = [];
 try {
-    $sqlMsg = "SELECT m.content, COUNT(orc.id) as count FROM order_recipients orc JOIN orders o ON orc.order_id = o.id JOIN predefined_messages m ON orc.message_id = m.id WHERE o.is_paid = 1 GROUP BY m.id ORDER BY count DESC LIMIT 5";
+    $sqlMsg = "SELECT m.content, COUNT(orc.id) as count FROM order_recipients orc JOIN orders o ON orc.order_id = o.id JOIN predefined_messages m ON orc.message_id = m.id GROUP BY m.id ORDER BY count DESC LIMIT 5";
     $topMessages = $pdo->query($sqlMsg)->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $topMessages = []; }
 
 try {
-    $sqlClasses = "SELECT c.name, COUNT(o.id) as count FROM orders o JOIN users u ON o.user_id = u.user_id JOIN classes c ON u.class_id = c.id WHERE o.is_paid = 1 GROUP BY c.id ORDER BY count DESC LIMIT 5";
+    $sqlClasses = "SELECT c.name, COUNT(o.id) as count FROM orders o JOIN users u ON o.user_id = u.user_id JOIN classes c ON u.class_id = c.id GROUP BY c.id ORDER BY count DESC LIMIT 5";
     $topClasses = $pdo->query($sqlClasses)->fetchAll(PDO::FETCH_ASSOC);
-    $sqlClassesRecipients = "SELECT c.name, SUM(rr.quantity) as count FROM recipient_roses rr JOIN order_recipients orc ON rr.recipient_id = orc.id JOIN orders o ON orc.order_id = o.id JOIN recipients r ON orc.recipient_id = r.id JOIN classes c ON r.class_id = c.id WHERE o.is_paid = 1 GROUP BY c.id ORDER BY count DESC LIMIT 5";
+    $sqlClassesRecipients = "SELECT c.name, SUM(rr.quantity) as count FROM recipient_roses rr JOIN order_recipients orc ON rr.recipient_id = orc.id JOIN orders o ON orc.order_id = o.id JOIN recipients r ON orc.recipient_id = r.id JOIN classes c ON r.class_id = c.id GROUP BY c.id ORDER BY count DESC LIMIT 5";
     $topClassesRecipients = $pdo->query($sqlClassesRecipients)->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $topClasses = []; $topClassesRecipients = []; }
 
@@ -151,7 +241,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
     try {
         if ($viewMode == 'global_days') {
             $chartTitle = "Activité par Jour";
-            $sqlChart = "SELECT DATE(created_at) as d, COUNT(*) as c FROM orders WHERE is_paid = 1 GROUP BY d ORDER BY d ASC";
+            $sqlChart = "SELECT DATE(created_at) as d, COUNT(*) as c FROM orders GROUP BY d ORDER BY d ASC";
             $stmtChart = $pdo->query($sqlChart);
             while($row = $stmtChart->fetch(PDO::FETCH_ASSOC)) {
                 $dateFr = date('d/m', strtotime($row['d']));
@@ -161,7 +251,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
             $targetDate = substr($viewMode, 5);
             $chartTitle = "Activité du " . date('d/m/Y', strtotime($targetDate));
             for($i=0; $i<=23; $i++) { $chartData[$i.'h'] = 0; }
-            $sqlChart = "SELECT HOUR(created_at) as h, COUNT(*) as c FROM orders WHERE is_paid = 1 AND DATE(created_at) = ? GROUP BY h";
+            $sqlChart = "SELECT HOUR(created_at) as h, COUNT(*) as c FROM orders AND DATE(created_at) = ? GROUP BY h";
             $stmtChart = $pdo->prepare($sqlChart);
             $stmtChart->execute([$targetDate]);
             while($row = $stmtChart->fetch(PDO::FETCH_ASSOC)) {
@@ -170,7 +260,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
         } else {
             $chartTitle = "Activité Horaire (Global)";
             for($i=0; $i<=23; $i++) { $chartData[$i.'h'] = 0; }
-            $sqlChart = "SELECT HOUR(created_at) as h, COUNT(*) as c FROM orders WHERE is_paid = 1 GROUP BY h";
+            $sqlChart = "SELECT HOUR(created_at) as h, COUNT(*) as c FROM orders GROUP BY h";
             $stmtChart = $pdo->query($sqlChart);
             while($row = $stmtChart->fetch(PDO::FETCH_ASSOC)) {
                 $chartData[$row['h'].'h'] = $row['c'];
@@ -307,10 +397,32 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
             <div class="card border-0 shadow-sm p-3 h-100 bg-white">
                 <div class="d-flex align-items-center mb-1">
                     <div class="bg-warning bg-opacity-10 p-2 rounded me-2 text-warning"><i class="fas fa-piggy-bank"></i></div>
-                    <small class="text-uppercase text-muted fw-bold" style="font-size: 0.75rem;">Cagnotte</small>
+                    <small class="text-uppercase text-muted fw-bold" style="font-size: 0.75rem;">Cagnotte totale</small>
                 </div>
-                <h3 class="fw-bold text-warning mb-0"><?php echo number_format($potentialRevenue, 2); ?> €</h3>
-                <small class="text-muted" style="font-size: 0.75rem;">En attente de paiement</small>
+                <h3 class="fw-bold text-warning mb-0"><?php echo number_format($totalRevenue + $potentialRevenue, 2); ?> €</h3>
+                <small class="text-muted" style="font-size: 0.75rem;">(<?php echo $potentialRevenue; ?> € en attente de paiement)</small>
+            </div>
+        </div>
+
+        <div class="col-lg-3 col-6">
+            <div class="card border-0 shadow-sm p-3 h-100 bg-white">
+                <div class="d-flex align-items-center mb-1">
+                    <div class="bg-danger bg-opacity-10 p-2 rounded me-2 text-danger"><i class="fas fa-piggy-bank"></i></div>
+                    <small class="text-uppercase text-muted fw-bold" style="font-size: 0.75rem;">Roses totales</small>
+                </div>
+                <h3 class="fw-bold text-danger mb-0"><?php echo number_format($totalRoses); ?></h3>
+                <small class="text-muted" style="font-size: 0.75rem;">(<?php echo $totalRoses - $totalRosesVendues; ?> en attente de vente)</small>
+            </div>
+        </div>
+
+        <div class="col-lg-3 col-6">
+            <div class="card border-0 shadow-sm p-3 h-100 bg-white">
+                <div class="d-flex align-items-center mb-1">
+                    <div class="bg-info bg-opacity-10 p-2 rounded me-2 text-info"><i class="fas fa-users"></i></div>
+                    <small class="text-uppercase text-muted fw-bold" style="font-size: 0.75rem;">Participants</small>
+                </div>
+                <h3 class="fw-bold text-info mb-0"><?php echo $uniqueBuyers; ?></h3>
+                <small class="text-muted" style="font-size: 0.75rem;">Élèves différents</small>
             </div>
         </div>
 
@@ -328,11 +440,33 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
         <div class="col-lg-3 col-6">
             <div class="card border-0 shadow-sm p-3 h-100 bg-white">
                 <div class="d-flex align-items-center mb-1">
+                    <div class="bg-primary bg-opacity-10 p-2 rounded me-2 text-primary"><i class="fas fa-shopping-basket"></i></div>
+                    <small class="text-uppercase text-muted fw-bold" style="font-size: 0.75rem;">Panier Moyen</small>
+                </div>
+                <h3 class="fw-bold text-primary mb-0"><?php echo $avgBasket; ?></h3>
+                <small class="text-muted" style="font-size: 0.75rem;">Roses par commande</small>
+            </div>
+        </div>
+
+        <div class="col-lg-3 col-6">
+            <div class="card border-0 shadow-sm p-3 h-100 bg-white">
+                <div class="d-flex align-items-center mb-1">
                     <div class="bg-danger bg-opacity-10 p-2 rounded me-2 text-danger"><i class="fas fa-heart-circle-check"></i></div>
                     <small class="text-uppercase text-muted fw-bold" style="font-size: 0.75rem;">Casanova</small>
                 </div>
                 <h3 class="fw-bold text-dark mb-0 fs-5 text-truncate" title="<?php echo $casanovaName; ?>"><?php echo $casanovaName; ?></h3>
                 <small class="text-muted" style="font-size: 0.75rem;"><?php echo $casanovaCount; ?> destinataires diff.</small>
+            </div>
+        </div>
+
+        <div class="col-lg-3 col-6">
+            <div class="card border-0 shadow-sm p-3 h-100 bg-white">
+                <div class="d-flex align-items-center mb-1">
+                    <div class="bg-secondary bg-opacity-10 p-2 rounded me-2 text-secondary"><i class="fas fa-school"></i></div>
+                    <small class="text-uppercase text-muted fw-bold" style="font-size: 0.75rem;">Top Classe</small>
+                </div>
+                <h3 class="fw-bold text-secondary mb-0 fs-5 text-truncate"><?php echo $topClassName; ?></h3>
+                <small class="text-muted" style="font-size: 0.75rem;"><?php echo $topClassCount; ?> commandes</small>
             </div>
         </div>
     </div>
@@ -349,6 +483,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
                 <div class="progress mt-2" style="height: 6px;">
                     <div class="progress-bar bg-primary" style="width: <?php echo $percentPaid; ?>%"></div>
                 </div>
+                <small class="text-muted mt-1 d-block small"><?php echo $nbPaid; ?> / <?php echo $totalOrders; ?></small>
             </div>
         </div>
 
@@ -363,7 +498,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
                 <div class="progress mt-2" style="height: 6px;">
                     <div class="progress-bar bg-warning" style="width: <?php echo $percentPrep; ?>%"></div>
                 </div>
-                <small class="text-muted mt-1 d-block small"><?php echo $nbPrepared; ?> / <?php echo $totalPaquets; ?></small>
+                <small class="text-muted mt-1 d-block small"><?php echo $nbPrepared; ?> / <?php echo $totalOrders; ?></small>
             </div>
         </div>
 
@@ -377,7 +512,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
                 <div class="progress mt-2" style="height: 6px;">
                     <div class="progress-bar bg-success" style="width: <?php echo $percentDist; ?>%"></div>
                 </div>
-                <small class="text-muted mt-1 d-block small"><?php echo $nbDistributed; ?> livrés</small>
+                <small class="text-muted mt-1 d-block small"><?php echo $nbDistributed; ?> / <?php echo $totalOrders; ?></small>
             </div>
         </div>
     </div>
@@ -390,7 +525,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
                         <i class="fas fa-sack-dollar fa-2x"></i>
                     </div>
                     <div>
-                        <h6 class="text-muted mb-0">Recettes Encaissées</h6>
+                        <h6 class="text-muted mb-0">Recettes (Encaissées)</h6>
                         <h3 class="fw-bold text-success mb-0"><?php echo number_format($totalRevenue, 2); ?> €</h3>
                     </div>
                 </div>
@@ -400,7 +535,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
                         <i class="fas fa-fan fa-2x"></i>
                     </div>
                     <div>
-                        <h6 class="text-muted mb-0">Roses Vendues</h6>
+                        <h6 class="text-muted mb-0">Roses Vendues (Encaissées)</h6>
                         <h3 class="fw-bold text-danger mb-0"><?php echo $totalRosesVendues; ?></h3>
                     </div>
                 </div>
@@ -410,7 +545,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
                         <i class="fas fa-shopping-basket fa-2x"></i>
                     </div>
                     <div>
-                        <h6 class="text-muted mb-0">Panier Moyen</h6>
+                        <h6 class="text-muted mb-0">Panier Moyen (Encaissées)</h6>
                         <h3 class="fw-bold text-primary mb-0"><?php echo $avgBasket; ?> <small class="fs-6 text-muted">roses/cmd</small></h3>
                     </div>
                 </div>
