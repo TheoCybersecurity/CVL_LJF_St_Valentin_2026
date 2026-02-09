@@ -1,80 +1,96 @@
 <?php
-require 'db.php';
+require 'db.php'; // Assure-toi que c'est bien le bon nom de fichier (ou pdo_connect.php selon ton projet)
 require 'auth_check.php';
-require 'mail_config.php'; // On inclut ta configuration PHPMailer
+require 'mail_config.php'; 
 
 checkAccess('admin');
 
 use PHPMailer\PHPMailer\Exception;
 
-// --- CONFIGURATION DE SÉCURITÉ ---
+// --- CONFIGURATION ---
 // METTRE SUR FALSE POUR ENVOYER RÉELLEMENT AUX ÉLÈVES
 $TEST_MODE = false; 
 $TEST_EMAIL = 'theo.marescal@gmail.com'; 
 
 $messageStr = "";
 $messageType = "";
+$errorLog = []; // Tableau pour stocker les erreurs précises
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Augmente le temps max d'exécution du script à 5 minutes (pour les envois lents)
+    set_time_limit(300);
+
     $mode = $_POST['mode']; // 'reminder' ou 'custom'
     $customSubject = $_POST['subject'] ?? "Information CVL";
     $customBody = $_POST['custom_message'] ?? "";
+    $targetFilter = $_POST['target_filter'] ?? 'all'; // 'all', 'paid', 'unpaid'
     
     // 1. SÉLECTION DES DESTINATAIRES
     $recipients = [];
 
     if ($mode === 'reminder') {
-        // Jointure pour récupérer l'email depuis 'users'
-        // On ne sélectionne QUE ceux qui ont un reste à payer > 0
+        // --- MODE RAPPEL (Uniquement impayés, logique fixe) ---
         $sql = "SELECT u.email, u.nom, u.prenom, SUM(o.total_price) as total_due 
                 FROM orders o
                 JOIN users u ON o.user_id = u.user_id
                 WHERE o.is_paid = 0 
                 GROUP BY u.user_id";
-                
+        
         $stmt = $pdo->query($sql);
         $recipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $subject = "Rappel : Paiement de vos Roses 🌹"; // Sujet fixe pour le rappel
+        $subject = "Rappel : Paiement de vos Roses 🌹"; 
         
     } else {
-        // Mode personnalisé : Tous les acheteurs distincts
+        // --- MODE PERSONNALISÉ (Avec filtre) ---
         $sql = "SELECT DISTINCT u.email, u.nom, u.prenom 
                 FROM orders o
                 JOIN users u ON o.user_id = u.user_id";
+
+        // Application du filtre
+        if ($targetFilter === 'paid') {
+            $sql .= " WHERE o.is_paid = 1";
+        } elseif ($targetFilter === 'unpaid') {
+            $sql .= " WHERE o.is_paid = 0";
+        }
+        // Si 'all', on ne met pas de WHERE, on prend tout le monde.
+
+        $sql .= " GROUP BY u.user_id";
                 
         $stmt = $pdo->query($sql);
         $recipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $subject = $customSubject;
     }
 
-    // 2. PRÉPARATION DE PHPMAILER
+    // 2. ENVOI
     $countSent = 0;
-    $mail = getMailer(); // On récupère l'instance configurée depuis mail_config.php
+    $mail = getMailer(); 
 
     foreach ($recipients as $row) {
         $prenom = htmlspecialchars($row['prenom']);
         $nom = htmlspecialchars($row['nom']);
         $emailUser = $row['email'];
 
-        // Si pas d'email, on passe
-        if (empty($emailUser)) continue;
+        // Détection des erreurs "Pas d'email"
+        if (empty($emailUser)) {
+            $errorLog[] = "Introuvable : Pas d'adresse email pour <strong>$nom $prenom</strong>.";
+            continue;
+        }
 
-        // --- CONSTRUCTION DU CONTENU INTÉRIEUR ---
+        // --- CONTENU ---
         $innerContent = "";
         
         if ($mode === 'reminder') {
             $amount = number_format($row['total_due'], 2);
             $innerContent = "
                 <p>Bonjour <strong>$prenom</strong>,</p>
-                <p>Sauf erreur de notre part, nous n'avons pas encore reçu le règlement de vos commandes de roses.</p>
+                <p>DERNIER JOUR ⚠️ ! Sauf erreur de notre part, nous n'avons pas encore reçu le règlement de vos commandes de roses. Faites vite, le paiement de vos commandes s'arrête <strong>ce soir</strong> !</p>
                 
                 <div style='background-color: #fff0f6; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #d63384;'>
                     <h3 style='margin: 0; color: #d63384;'>Reste à payer : $amount €</h3>
-                    <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Veuillez régler auprès du CVL pour valider la commande. Les paiements se font par <strong>espèce</strong> et par <strong>carte bancaire</strong> dans le hall de la <strong>Vie Scolaire</strong>.</p>
-                    <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Les paiements ne se feront que du <strong>2 au 6 février 2026</strong> uniquement de <strong>13h à 14h</strong>.</p>
+                    <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Veuillez régler au stand du CVL, dans le hall de la vie scolaire, RDC bâtiment E, aujourd'hui (aux pauses de 10 et 16h et de 12h à 14h).</p>
                 </div>
                 
-                <p>Sans paiement de votre part avant la date limite, vos commandes seront malheureusement annulées.</p>
+                <p>Sans paiement avant la date limite, les commandes seront annulées.</p>
             ";
         } else {
             // Mode Personnalisé
@@ -94,44 +110,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <h1 style='margin: 0;'>Saint Valentin 🌹</h1>
             </div>
             <div style='padding: 20px; color: #333;'>
-                
                 $innerContent
-                
                 <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>
                 <p style='font-size: 0.8em; color: #888; text-align: center;'>
                     Ceci est un mail automatique. Merci de ne pas répondre.<br>
-                    L'équipe du CVL - Lycée Jules Fil.
+                    L'équipe du CVL.
                 </p>
             </div>
         </div>";
 
-        // --- ENVOI VIA PHPMAILER ---
+        // --- ENVOI ---
         try {
-            // Important : On vide les adresses précédentes pour ne pas accumuler les destinataires
             $mail->clearAddresses();
-            
-            // Gestion Mode Test
             $destinataire = $TEST_MODE ? $TEST_EMAIL : $emailUser;
             
-            $mail->addAddress($destinataire); // Ajout du destinataire
-            $mail->isHTML(true);              // Format HTML
-            $mail->Subject = $subject;        // Sujet
-            $mail->Body    = $emailHtml;      // Contenu
+            $mail->addAddress($destinataire);
+            $mail->isHTML(true);
+            $mail->Subject = $subject;
+            $mail->Body    = $emailHtml;
 
             $mail->send();
             $countSent++;
+
+            // PAUSE ANTI-SPAM : Dort 1 seconde tous les 10 mails pour ne pas bloquer le SMTP
+            if ($countSent % 10 == 0) { sleep(1); }
+
         } catch (Exception $e) {
-            // En cas d'erreur sur un mail spécifique, on continue quand même les autres
-            // On pourrait logger l'erreur ici : error_log($mail->ErrorInfo);
+            // ENREGISTREMENT DE L'ERREUR
+            $errorLog[] = "Échec pour <strong>$nom $prenom</strong> ($emailUser) : " . $mail->ErrorInfo;
+            
+            // On réinitialise le mailer en cas de crash critique
+            try { $mail = getMailer(); } catch (Exception $ex) {}
         }
     }
     
-    $messageType = "success";
-    $targetName = ($mode === 'reminder') ? "élèves en attente de paiement" : "acheteurs";
-    $messageStr = "$countSent emails envoyés avec succès aux $targetName via SMTP.";
+    // Message de confirmation adapté
+    $targetName = "personnes";
+    if ($mode === 'reminder') $targetName = "élèves en attente de paiement";
+    elseif ($targetFilter === 'paid') $targetName = "élèves ayant payé";
+    elseif ($targetFilter === 'unpaid') $targetName = "élèves n'ayant pas payé";
+    elseif ($targetFilter === 'all') $targetName = "tous les acheteurs";
+
+    // Si on a des erreurs, on met un warning, sinon success
+    if (!empty($errorLog)) {
+        $messageType = "warning";
+        $messageStr = "Envoi terminé avec des erreurs. $countSent emails envoyés sur " . count($recipients) . ".";
+    } else {
+        $messageType = "success";
+        $messageStr = "$countSent emails envoyés avec succès ($targetName).";
+    }
     
     if ($TEST_MODE) {
-        $messageStr .= " <br><strong>(MODE TEST ACTIF : Tous les mails ont été envoyés à $TEST_EMAIL)</strong>";
+        $messageStr .= " <br><strong>(MODE TEST ACTIF : Tout envoyé à $TEST_EMAIL)</strong>";
     }
 }
 ?>
@@ -139,7 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <title>Administration Emails - St Valentin</title>
+    <title>Administration Emails</title>
     <?php include 'head_imports.php'; ?>
 </head>
 <body class="bg-light">
@@ -148,7 +178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2><i class="fas fa-envelope-open-text text-danger me-2"></i> Campagnes Email</h2>
-        <a href="manage_orders.php" class="btn btn-outline-secondary btn-sm">Retour aux commandes</a>
+        <a href="admin.php" class="btn btn-outline-secondary btn-sm">Retour</a>
     </div>
 
     <?php if ($TEST_MODE): ?>
@@ -156,8 +186,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <i class="fas fa-exclamation-triangle fa-2x me-3"></i>
         <div>
             <strong>MODE TEST ACTIVÉ</strong><br>
-            Les emails ne partiront pas aux élèves. Ils seront tous envoyés à : <u><?php echo $TEST_EMAIL; ?></u>.
-            <br><small>Changez <code>$TEST_MODE = false</code> dans le code pour envoyer réellement.</small>
+            Les emails seront tous envoyés à : <u><?php echo $TEST_EMAIL; ?></u>.
         </div>
     </div>
     <?php endif; ?>
@@ -168,50 +197,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
     <?php endif; ?>
 
-    <div class="card shadow-sm border-0">
+    <?php if (!empty($errorLog)): ?>
+        <div class="alert alert-danger mt-3">
+            <h5><i class="fas fa-bug me-2"></i> Rapport d'erreurs (<?php echo count($errorLog); ?>)</h5>
+            <div class="bg-white p-2 rounded text-danger" style="max-height: 200px; overflow-y: auto; font-size: 0.85rem;">
+                <ul class="mb-0 ps-3">
+                    <?php foreach ($errorLog as $err): ?>
+                        <li><?php echo $err; ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+            <small class="mt-2 d-block">Ces utilisateurs n'ont pas reçu le mail.</small>
+        </div>
+    <?php endif; ?>
+
+    <div class="card shadow-sm border-0 mt-4">
         <div class="card-body p-4">
-            <form method="POST" id="emailForm" onsubmit="return confirm('Êtes-vous sûr de vouloir envoyer ces emails ?');">
+            <form method="POST" onsubmit="return confirm('Confirmer l\'envoi ?');">
                 
                 <div class="mb-4">
                     <label class="form-label fw-bold">Type de campagne</label>
                     <div class="btn-group w-100" role="group">
                         <input type="radio" class="btn-check" name="mode" id="modeReminder" value="reminder" checked onchange="toggleForm()">
                         <label class="btn btn-outline-danger" for="modeReminder">
-                            <i class="fas fa-hand-holding-usd me-2"></i> Rappel Paiement (Impayés uniquement)
+                            <i class="fas fa-hand-holding-usd me-2"></i> Rappel Paiement
                         </label>
 
                         <input type="radio" class="btn-check" name="mode" id="modeCustom" value="custom" onchange="toggleForm()">
                         <label class="btn btn-outline-primary" for="modeCustom">
-                            <i class="fas fa-pen-nib me-2"></i> Message Personnalisé (Tous)
+                            <i class="fas fa-pen-nib me-2"></i> Message Perso
                         </label>
                     </div>
                 </div>
 
                 <div id="reminderInfo" class="alert alert-light border">
-                    <h6 class="text-danger"><i class="fas fa-info-circle me-1"></i> Aperçu du message automatique :</h6>
-                    <small class="text-muted">
-                        "Bonjour [Prénom],<br>
-                        Sauf erreur de notre part, nous n'avons pas encore reçu le règlement...<br>
-                        Reste à payer : [Montant] €..."
-                    </small>
+                    <h6 class="text-danger"><i class="fas fa-info-circle me-1"></i> Rappel automatique</h6>
+                    <small class="text-muted">Envoie le montant restant dû à tous les élèves qui n'ont pas encore payé.</small>
                 </div>
 
                 <div id="customFields" style="display: none;">
+                    
                     <div class="mb-3">
-                        <label class="form-label">Objet du mail</label>
-                        <input type="text" name="subject" class="form-control" placeholder="Ex: Info importante concernant la distribution...">
+                        <label class="form-label fw-bold">Qui doit recevoir ce message ?</label>
+                        <select name="target_filter" class="form-select border-primary">
+                            <option value="all">👥 Tout le monde (Tous ceux qui ont commandé)</option>
+                            <option value="paid">✅ Uniquement ceux qui ont PAYÉ</option>
+                            <option value="unpaid">⚠️ Uniquement ceux qui n'ont PAS PAYÉ</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Objet</label>
+                        <input type="text" name="subject" class="form-control" placeholder="Ex: Merci pour votre commande !">
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Votre message</label>
-                        <textarea name="custom_message" class="form-control" rows="6" placeholder="Écrivez votre message ici. Il sera inséré dans le cadre officiel..."></textarea>
-                        <div class="form-text">Le "Bonjour [Prénom]" et la signature sont ajoutés automatiquement.</div>
+                        <label class="form-label">Message</label>
+                        <textarea name="custom_message" class="form-control" rows="5" placeholder="Votre message..."></textarea>
                     </div>
                 </div>
 
                 <div class="d-grid mt-4">
-                    <button type="submit" class="btn btn-dark btn-lg">
-                        <i class="fas fa-paper-plane me-2"></i> Envoyer les emails
-                    </button>
+                    <button type="submit" class="btn btn-dark btn-lg">Envoyer</button>
                 </div>
 
             </form>
@@ -222,16 +268,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <script>
     function toggleForm() {
         const isCustom = document.getElementById('modeCustom').checked;
-        const reminderInfo = document.getElementById('reminderInfo');
-        const customFields = document.getElementById('customFields');
-
-        if (isCustom) {
-            reminderInfo.style.display = 'none';
-            customFields.style.display = 'block';
-        } else {
-            reminderInfo.style.display = 'block';
-            customFields.style.display = 'none';
-        }
+        document.getElementById('reminderInfo').style.display = isCustom ? 'none' : 'block';
+        document.getElementById('customFields').style.display = isCustom ? 'block' : 'none';
     }
 </script>
 
