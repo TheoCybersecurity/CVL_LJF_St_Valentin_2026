@@ -540,7 +540,7 @@ $rosesMap = [];
 if (!empty($recipientIds)) {
     $inQuery = implode(',', array_fill(0, count($recipientIds), '?'));
     $stmtRoses = $pdo->prepare("
-        SELECT rr.recipient_id, rr.quantity, rp.name 
+        SELECT rr.recipient_id, rr.rose_product_id, rr.quantity, rp.name 
         FROM recipient_roses rr 
         JOIN rose_products rp ON rr.rose_product_id = rp.id 
         WHERE rr.recipient_id IN ($inQuery)
