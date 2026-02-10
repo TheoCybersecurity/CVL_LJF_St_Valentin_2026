@@ -75,24 +75,24 @@ Considérez cette version comme une **base solide (V1)** qui ne demande qu'à ê
 Voici quelques captures d'écran illustrant les différentes facettes de l'application.
 
 ### 🏠 Espace Élève & Inscription
-| Page de Bienvenue | Création de Compte | À propos (V1) |
+| Page de Bienvenue | Création de Compte | À propos |
 | :---: | :---: | :---: |
 | ![Welcome](screenshots/welcome.png) | ![Inscription](screenshots/create_account.png) | ![About 1](screenshots/about1.png) |
 
 ### 📊 Dashboards & Statistiques (Vue CVL)
-| Vue d'ensemble | Détails du Dashboard | Statistiques de Vente |
+| Vue d'ensemble des commandes | Modifications des commandes | Statistiques de Vente |
 | :---: | :---: | :---: |
 | ![CVL Dashboard](screenshots/cvl_dashboard.png) | ![Details](screenshots/cvl_dashboard_details.png) | ![Stats](screenshots/stats.png) |
 
-### ⚙️ Administration & Logistique
-| Zone d'Administration | Mode Préparation | Mode Distribution | Impression Étiquettes |
-| :---: | :---: | :---: | :---: |
-| ![Admin](screenshots/admin_zone.png) | ![Prep](screenshots/preparation_mode.png) | ![Delivery](screenshots/delivery_mode.png) | ![Labels](screenshots/print_labels.png) |
-
-### 🛠️ Maintenance & Sécurité
-| Logs Système | Annuaire & Droits | Configuration |
+### ⚙️ Logistique
+| Mode Préparation | Mode Distribution | Impression Étiquettes |
 | :---: | :---: | :---: |
-| ![Logs](screenshots/logs.png) | ![Directory](screenshots/directory.png) | ![Config](screenshots/config.png) |
+| ![Prep](screenshots/preparation_mode.png) | ![Delivery](screenshots/delivery_mode.png) | ![Labels](screenshots/print_labels.png) |
+
+### 🛠️ Administration & Sécurité
+| Zone d'Administration | Logs Système | Annuaire |
+| :---: | :---: | :---: |
+| ![Admin](screenshots/admin_zone.png) | ![Logs](screenshots/logs.png) | ![Directory](screenshots/directory.png) |
 
 ---
 
