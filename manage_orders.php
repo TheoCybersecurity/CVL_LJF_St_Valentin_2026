@@ -425,16 +425,15 @@ $totalOrders = $pdo->query("SELECT COUNT(*) FROM orders")->fetchColumn() ?: 0;
 $countUnpaid = $pdo->query("SELECT COUNT(*) FROM orders WHERE is_paid = 0")->fetchColumn();
 $percentPaid = ($totalOrders > 0) ? round((($totalOrders - $countUnpaid) / $totalOrders) * 100) : 0;
 
-// --- 3. RECHERCHE ET AFFICHAGE ---
+// --- 3. RECHERCHE, FILTRES ET PAGINATION ---
 $search = isset($_GET['q']) ? trim($_GET['q']) : '';
+$tab = isset($_GET['tab']) ? $_GET['tab'] : 'all'; // 'all', 'unpaid', 'paid'
+$page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
+$limit = 20; // Nombre de commandes par page (DOM léger = page rapide)
+$offset = ($page - 1) * $limit;
 
-$sql = "
-    SELECT 
-        o.id as order_id, o.created_at, o.total_price, o.is_paid, o.paid_at, 
-        u.nom as buyer_nom, u.prenom as buyer_prenom, u.class_id as buyer_class_id, c_buy.name as buyer_class_name,
-        ort.id as order_recipient_id, ort.is_anonymous, ort.message_id, ort.is_distributed, ort.distributed_at, ort.is_prepared, 
-        r.id as student_id, r.nom as dest_nom, r.prenom as dest_prenom, r.class_id as dest_class_id,
-        c_dest.name as dest_class_name, pm.content as message_content
+// Construction de la requête de base
+$sqlBase = "
     FROM orders o
     JOIN users u ON o.user_id = u.user_id 
     JOIN order_recipients ort ON o.id = ort.order_id
@@ -444,27 +443,60 @@ $sql = "
     LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
 ";
 
+$whereClauses = [];
 $params = [];
+
+// Filtre Recherche
 if (!empty($search)) {
-    $sql .= " WHERE 
-        o.id LIKE :s OR u.nom LIKE :s OR u.prenom LIKE :s OR CONCAT(u.prenom, ' ', u.nom) LIKE :s OR 
-        c_buy.name LIKE :s OR r.nom LIKE :s OR r.prenom LIKE :s OR CONCAT(r.prenom, ' ', r.nom) LIKE :s OR c_dest.name LIKE :s
-    ";
+    $whereClauses[] = "(o.id LIKE :s OR u.nom LIKE :s OR u.prenom LIKE :s OR CONCAT(u.prenom, ' ', u.nom) LIKE :s OR r.nom LIKE :s OR r.prenom LIKE :s OR CONCAT(r.prenom, ' ', r.nom) LIKE :s)";
     $params[':s'] = '%' . $search . '%';
 }
 
-$sql .= " ORDER BY o.is_paid ASC, o.created_at DESC";
+// Filtre Onglets
+if ($tab === 'unpaid') {
+    $whereClauses[] = "o.is_paid = 0";
+} elseif ($tab === 'paid') {
+    $whereClauses[] = "o.is_paid = 1";
+}
 
-try {
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute($params);
-    $raw_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) { die("Erreur SQL : " . $e->getMessage()); }
+// Application des filtres
+$sqlWhere = !empty($whereClauses) ? " WHERE " . implode(' AND ', $whereClauses) : "";
 
-// --- 4. REGROUPEMENT ---
+// 1. Compter le total (pour la pagination)
+$countSql = "SELECT COUNT(DISTINCT o.id) " . $sqlBase . $sqlWhere;
+$totalResults = $pdo->prepare($countSql);
+$totalResults->execute($params);
+$totalRows = $totalResults->fetchColumn();
+$totalPages = ceil($totalRows / $limit);
+
+// 2. Récupérer les données de la page (Optimisé)
+$sqlData = "
+    SELECT 
+        o.id as order_id, o.created_at, o.total_price, o.is_paid, o.paid_at, 
+        u.nom as buyer_nom, u.prenom as buyer_prenom, u.class_id as buyer_class_id, c_buy.name as buyer_class_name,
+        ort.id as order_recipient_id, ort.is_anonymous, ort.message_id, ort.is_distributed, ort.distributed_at, ort.is_prepared, 
+        r.id as student_id, r.nom as dest_nom, r.prenom as dest_prenom, r.class_id as dest_class_id,
+        c_dest.name as dest_class_name, pm.content as message_content
+    " . $sqlBase . $sqlWhere . " 
+    ORDER BY o.is_paid ASC, o.created_at DESC 
+    LIMIT $limit OFFSET $offset";
+
+$stmt = $pdo->prepare($sqlData);
+$stmt->execute($params);
+$raw_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// --- 4. REGROUPEMENT & CHARGEMENT GROUPÉ (EAGER LOADING) ---
+// Cette technique tue le "N+1 Problem" : On charge tout en 3 requêtes au lieu de 300.
+
 $groupedOrders = [];
+$recipientIds = []; // Pour charger toutes les roses d'un coup
+$studentIds = [];   // Pour charger tous les emplois du temps d'un coup
+
+// A. Première passe : On structure les commandes et on collecte les IDs
 foreach ($raw_results as $row) {
     $orderId = $row['order_id'];
+    $recipientIds[] = $row['order_recipient_id'];
+    $studentIds[] = $row['student_id'];
 
     if (!isset($groupedOrders[$orderId])) {
         $groupedOrders[$orderId] = [
@@ -482,35 +514,8 @@ foreach ($raw_results as $row) {
             'recipients' => []
         ];
     }
-
-    $stmtRoses = $pdo->prepare("SELECT rr.id as rose_link_id, rr.quantity, rr.rose_product_id, rp.name FROM recipient_roses rr JOIN rose_products rp ON rr.rose_product_id = rp.id WHERE rr.recipient_id = ?");
-    $stmtRoses->execute([$row['order_recipient_id']]);
-    $roses = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
-
-    $stmtSchedule = $pdo->prepare("SELECT h08, h09, h10, h11, h12, h13, h14, h15, h16, h17 FROM schedules WHERE recipient_id = ?");
-    $stmtSchedule->execute([$row['student_id']]);
-    $schedRow = $stmtSchedule->fetch(PDO::FETCH_ASSOC);
-
-    $scheduleMap = [];
-    $isAbsent = false; 
-
-    if ($schedRow) {
-        $countAbsent = 0;
-        foreach ($schedRow as $col => $roomId) {
-            if ($roomId == 180) $countAbsent++;
-        }
-        if ($countAbsent === 10) $isAbsent = true;
-
-        foreach ($schedRow as $col => $roomId) {
-            $hour = intval(substr($col, 1)); 
-            if (!empty($roomId) && isset($allRooms[$roomId])) {
-                $scheduleMap[$hour] = $allRooms[$roomId];
-            } else {
-                $scheduleMap[$hour] = '';
-            }
-        }
-    }
-
+    
+    // On prépare le destinataire (sans les roses/EDT pour l'instant)
     $groupedOrders[$orderId]['recipients'][] = [
         'order_recipient_id' => $row['order_recipient_id'],
         'student_id' => $row['student_id'],
@@ -524,11 +529,71 @@ foreach ($raw_results as $row) {
         'is_prepared' => $row['is_prepared'],  
         'is_distributed' => $row['is_distributed'],
         'distributed_at' => $row['distributed_at'],
-        'roses' => $roses,
-        'schedule_map' => $scheduleMap,
-        'is_absent' => $isAbsent
+        'roses' => [],        // Sera rempli après
+        'schedule_map' => [], // Sera rempli après
+        'is_absent' => false
     ];
 }
+
+// B. Chargement global des roses (1 seule requête SQL)
+$rosesMap = [];
+if (!empty($recipientIds)) {
+    $inQuery = implode(',', array_fill(0, count($recipientIds), '?'));
+    $stmtRoses = $pdo->prepare("
+        SELECT rr.recipient_id, rr.quantity, rp.name 
+        FROM recipient_roses rr 
+        JOIN rose_products rp ON rr.rose_product_id = rp.id 
+        WHERE rr.recipient_id IN ($inQuery)
+    ");
+    $stmtRoses->execute($recipientIds);
+    while ($rose = $stmtRoses->fetch(PDO::FETCH_ASSOC)) {
+        $rosesMap[$rose['recipient_id']][] = $rose;
+    }
+}
+
+// C. Chargement global des emplois du temps (1 seule requête SQL)
+$schedulesMap = [];
+if (!empty($studentIds)) {
+    // On dédoublonne les IDs élèves pour optimiser
+    $uniqueStudentIds = array_unique($studentIds);
+    $inQuerySched = implode(',', array_fill(0, count($uniqueStudentIds), '?'));
+    
+    $stmtSched = $pdo->prepare("SELECT recipient_id, h08, h09, h10, h11, h12, h13, h14, h15, h16, h17 FROM schedules WHERE recipient_id IN ($inQuerySched)");
+    $stmtSched->execute(array_values($uniqueStudentIds));
+    
+    while ($sched = $stmtSched->fetch(PDO::FETCH_ASSOC)) {
+        $schedulesMap[$sched['recipient_id']] = $sched;
+    }
+}
+
+// D. Seconde passe : On injecte les données dans le tableau final
+foreach ($groupedOrders as &$order) {
+    foreach ($order['recipients'] as &$dest) {
+        // Injection Roses
+        if (isset($rosesMap[$dest['order_recipient_id']])) {
+            $dest['roses'] = $rosesMap[$dest['order_recipient_id']];
+        }
+        
+        // Injection EDT
+        if (isset($schedulesMap[$dest['student_id']])) {
+            $schedRow = $schedulesMap[$dest['student_id']];
+            $countAbsent = 0;
+            
+            // Calcul absence et mapping
+            foreach ($schedRow as $col => $roomId) {
+                if ($col === 'recipient_id') continue;
+                if ($roomId == 180) $countAbsent++;
+                
+                $hour = intval(substr($col, 1));
+                if (!empty($roomId) && isset($allRooms[$roomId])) {
+                    $dest['schedule_map'][$hour] = $allRooms[$roomId];
+                }
+            }
+            if ($countAbsent >= 9) $dest['is_absent'] = true; // Si absent presque toute la journée
+        }
+    }
+}
+unset($order); // Casse la référence
 
 // =================================================================
 // FONCTION UTILITAIRE POUR LES LOGS (SNAPSHOT)
@@ -670,6 +735,24 @@ function getOrderSnapshot($pdo, $orderId) {
         <a href="delivery.php" class="btn btn-lg btn-success fw-bold shadow-sm flex-grow-1"><i class="fas fa-truck"></i> Mode Distribution</a>
     </div>
 
+    <ul class="nav nav-pills mb-3 gap-2">
+        <li class="nav-item">
+            <a class="nav-link <?php echo ($tab == 'all') ? 'active bg-dark' : 'bg-white text-dark border'; ?>" href="?tab=all">
+                <i class="fas fa-list me-1"></i> Tout
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link <?php echo ($tab == 'unpaid') ? 'active bg-warning text-dark fw-bold' : 'bg-white text-dark border'; ?>" href="?tab=unpaid">
+                <i class="fas fa-hand-holding-usd me-1"></i> À Encaisser
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link <?php echo ($tab == 'paid') ? 'active bg-success' : 'bg-white text-dark border'; ?>" href="?tab=paid">
+                <i class="fas fa-check-circle me-1"></i> Payés
+            </a>
+        </li>
+    </ul>
+
     <div class="card shadow border-0 rounded-3">
         <div class="card-header bg-white py-3 d-flex flex-wrap justify-content-between align-items-center gap-3">
             <div class="d-flex align-items-center gap-3">
@@ -677,6 +760,7 @@ function getOrderSnapshot($pdo, $orderId) {
                 <?php if(!empty($search)): ?><span class="badge bg-warning text-dark"><?php echo count($groupedOrders); ?> résultat(s)</span><?php endif; ?>
             </div>
             <form method="GET" action="manage_orders.php" class="d-flex mt-2 mt-md-0" style="max-width: 350px;">
+                <input type="hidden" name="tab" value="<?php echo htmlspecialchars($tab); ?>">
                 <div class="input-group">
                     <input type="text" name="q" class="form-control rounded-start-pill border-end-0 bg-light" placeholder="Rechercher..." value="<?php echo htmlspecialchars($search); ?>">
                     <?php if(!empty($search)): ?><a href="manage_orders.php" class="btn btn-light border border-start-0 border-end-0 text-danger"><i class="fas fa-times"></i></a><?php endif; ?>
@@ -933,8 +1017,31 @@ function getOrderSnapshot($pdo, $orderId) {
                                 </div>
                             </div>
                         </div>
-
                     <?php endforeach; ?>
+                    <?php if ($totalPages > 1): ?>
+                    <nav class="mt-4 border-top pt-3">
+                        <ul class="pagination justify-content-center">
+                            <li class="page-item <?php echo ($page <= 1) ? 'disabled' : ''; ?>">
+                                <a class="page-link border-0 text-dark" href="?page=<?php echo $page-1; ?>&tab=<?php echo $tab; ?>&q=<?php echo urlencode($search); ?>">
+                                    <i class="fas fa-chevron-left me-1"></i> Précédent
+                                </a>
+                            </li>
+                            
+                            <li class="page-item disabled">
+                                <span class="page-link border-0 bg-transparent text-muted">
+                                    Page <?php echo $page; ?> / <?php echo $totalPages; ?> 
+                                    (Total : <?php echo $totalRows; ?>)
+                                </span>
+                            </li>
+
+                            <li class="page-item <?php echo ($page >= $totalPages) ? 'disabled' : ''; ?>">
+                                <a class="page-link border-0 text-dark" href="?page=<?php echo $page+1; ?>&tab=<?php echo $tab; ?>&q=<?php echo urlencode($search); ?>">
+                                    Suivant <i class="fas fa-chevron-right ms-1"></i>
+                                </a>
+                            </li>
+                        </ul>
+                    </nav>
+                    <?php endif; ?>
                 </div>
             <?php endif; ?>
         </div>
