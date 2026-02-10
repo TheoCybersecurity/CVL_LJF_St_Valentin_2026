@@ -429,11 +429,11 @@ $percentPaid = ($totalOrders > 0) ? round((($totalOrders - $countUnpaid) / $tota
 $search = isset($_GET['q']) ? trim($_GET['q']) : '';
 $tab = isset($_GET['tab']) ? $_GET['tab'] : 'all'; // 'all', 'unpaid', 'paid'
 $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
-$limit = 20; // Nombre de commandes par page (DOM léger = page rapide)
+$limit = 20; // On charge exactement 20 COMMANDES par page
 $offset = ($page - 1) * $limit;
 
-// Construction de la requête de base
-$sqlBase = "
+// Clause de base pour les jointures (utilisée pour filtrer)
+$baseJoins = "
     FROM orders o
     JOIN users u ON o.user_id = u.user_id 
     JOIN order_recipients ort ON o.id = ort.order_id
@@ -443,47 +443,68 @@ $sqlBase = "
     LEFT JOIN predefined_messages pm ON ort.message_id = pm.id
 ";
 
-$whereClauses = [];
+// Construction des conditions
+$whereConditions = [];
 $params = [];
 
 // Filtre Recherche
 if (!empty($search)) {
-    $whereClauses[] = "(o.id LIKE :s OR u.nom LIKE :s OR u.prenom LIKE :s OR CONCAT(u.prenom, ' ', u.nom) LIKE :s OR r.nom LIKE :s OR r.prenom LIKE :s OR CONCAT(r.prenom, ' ', r.nom) LIKE :s)";
+    $whereConditions[] = "(
+        o.id LIKE :s OR 
+        u.nom LIKE :s OR u.prenom LIKE :s OR CONCAT(u.prenom, ' ', u.nom) LIKE :s OR 
+        c_buy.name LIKE :s OR 
+        r.nom LIKE :s OR r.prenom LIKE :s OR CONCAT(r.prenom, ' ', r.nom) LIKE :s OR 
+        c_dest.name LIKE :s
+    )";
     $params[':s'] = '%' . $search . '%';
 }
 
 // Filtre Onglets
 if ($tab === 'unpaid') {
-    $whereClauses[] = "o.is_paid = 0";
+    $whereConditions[] = "o.is_paid = 0";
 } elseif ($tab === 'paid') {
-    $whereClauses[] = "o.is_paid = 1";
+    $whereConditions[] = "o.is_paid = 1";
 }
 
-// Application des filtres
-$sqlWhere = !empty($whereClauses) ? " WHERE " . implode(' AND ', $whereClauses) : "";
+// Assemblage du WHERE
+$sqlWhere = !empty($whereConditions) ? " WHERE " . implode(' AND ', $whereConditions) : "";
 
-// 1. Compter le total (pour la pagination)
-$countSql = "SELECT COUNT(DISTINCT o.id) " . $sqlBase . $sqlWhere;
-$totalResults = $pdo->prepare($countSql);
-$totalResults->execute($params);
-$totalRows = $totalResults->fetchColumn();
+// --- ÉTAPE 1 : Récupérer les IDs des 20 commandes (Pagination correcte) ---
+// On utilise DISTINCT o.id pour ne pas compter les destinataires multiples comme plusieurs pages
+$countSql = "SELECT COUNT(DISTINCT o.id) " . $baseJoins . $sqlWhere;
+$totalResultsStmt = $pdo->prepare($countSql);
+$totalResultsStmt->execute($params);
+$totalRows = $totalResultsStmt->fetchColumn();
 $totalPages = ceil($totalRows / $limit);
 
-// 2. Récupérer les données de la page (Optimisé)
-$sqlData = "
-    SELECT 
-        o.id as order_id, o.created_at, o.total_price, o.is_paid, o.paid_at, 
-        u.nom as buyer_nom, u.prenom as buyer_prenom, u.class_id as buyer_class_id, c_buy.name as buyer_class_name,
-        ort.id as order_recipient_id, ort.is_anonymous, ort.message_id, ort.is_distributed, ort.distributed_at, ort.is_prepared, 
-        r.id as student_id, r.nom as dest_nom, r.prenom as dest_prenom, r.class_id as dest_class_id,
-        c_dest.name as dest_class_name, pm.content as message_content
-    " . $sqlBase . $sqlWhere . " 
-    ORDER BY o.is_paid ASC, o.created_at DESC 
-    LIMIT $limit OFFSET $offset";
+// Récupération des IDs de la page actuelle
+$sqlIds = "SELECT DISTINCT o.id " . $baseJoins . $sqlWhere . " ORDER BY o.is_paid ASC, o.created_at DESC LIMIT $limit OFFSET $offset";
+$stmtIds = $pdo->prepare($sqlIds);
+$stmtIds->execute($params);
+$pageOrderIds = $stmtIds->fetchAll(PDO::FETCH_COLUMN);
 
-$stmt = $pdo->prepare($sqlData);
-$stmt->execute($params);
-$raw_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// --- ÉTAPE 2 : Récupérer TOUTES les données pour ces commandes ---
+$raw_results = [];
+
+if (!empty($pageOrderIds)) {
+    $inQuery = implode(',', array_fill(0, count($pageOrderIds), '?'));
+    
+    // Note importante : ORDER BY ort.id ASC corrige le bug d'affichage des destinataires
+    $sqlData = "
+        SELECT 
+            o.id as order_id, o.created_at, o.total_price, o.is_paid, o.paid_at, 
+            u.nom as buyer_nom, u.prenom as buyer_prenom, u.class_id as buyer_class_id, c_buy.name as buyer_class_name,
+            ort.id as order_recipient_id, ort.is_anonymous, ort.message_id, ort.is_distributed, ort.distributed_at, ort.is_prepared, 
+            r.id as student_id, r.nom as dest_nom, r.prenom as dest_prenom, r.class_id as dest_class_id,
+            c_dest.name as dest_class_name, pm.content as message_content
+        " . $baseJoins . "
+        WHERE o.id IN ($inQuery)
+        ORDER BY o.is_paid ASC, o.created_at DESC, ort.id ASC"; 
+        
+    $stmtData = $pdo->prepare($sqlData);
+    $stmtData->execute($pageOrderIds);
+    $raw_results = $stmtData->fetchAll(PDO::FETCH_ASSOC);
+}
 
 // --- 4. REGROUPEMENT & CHARGEMENT GROUPÉ (EAGER LOADING) ---
 // Cette technique tue le "N+1 Problem" : On charge tout en 3 requêtes au lieu de 300.
@@ -594,6 +615,7 @@ foreach ($groupedOrders as &$order) {
     }
 }
 unset($order); // Casse la référence
+unset($dest);
 
 // =================================================================
 // FONCTION UTILITAIRE POUR LES LOGS (SNAPSHOT)
@@ -1030,7 +1052,7 @@ function getOrderSnapshot($pdo, $orderId) {
                             <li class="page-item disabled">
                                 <span class="page-link border-0 bg-transparent text-muted">
                                     Page <?php echo $page; ?> / <?php echo $totalPages; ?> 
-                                    (Total : <?php echo $totalRows; ?>)
+                                    (Total : <?php echo $totalRows; ?> commandes)
                                 </span>
                             </li>
 
