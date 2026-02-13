@@ -1,5 +1,5 @@
 <?php
-require 'db.php'; // Assure-toi que c'est bien le bon nom de fichier (ou pdo_connect.php selon ton projet)
+require 'db.php';
 require 'auth_check.php';
 require 'mail_config.php'; 
 
@@ -14,22 +14,21 @@ $TEST_EMAIL = 'theo.marescal@gmail.com';
 
 $messageStr = "";
 $messageType = "";
-$errorLog = []; // Tableau pour stocker les erreurs précises
+$errorLog = []; 
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Augmente le temps max d'exécution du script à 5 minutes (pour les envois lents)
     set_time_limit(300);
 
-    $mode = $_POST['mode']; // 'reminder' ou 'custom'
+    $mode = $_POST['mode']; // 'reminder', 'custom' ou 'absent_recipient'
     $customSubject = $_POST['subject'] ?? "Information CVL";
     $customBody = $_POST['custom_message'] ?? "";
-    $targetFilter = $_POST['target_filter'] ?? 'all'; // 'all', 'paid', 'unpaid'
+    $targetFilter = $_POST['target_filter'] ?? 'all'; 
     
-    // 1. SÉLECTION DES DESTINATAIRES
+    // 1. SÉLECTION ET PRÉPARATION DES DONNÉES
     $recipients = [];
 
     if ($mode === 'reminder') {
-        // --- MODE RAPPEL (Uniquement impayés, logique fixe) ---
+        // --- MODE RAPPEL PAIEMENT ---
         $sql = "SELECT u.email, u.nom, u.prenom, SUM(o.total_price) as total_due 
                 FROM orders o
                 JOIN users u ON o.user_id = u.user_id
@@ -39,25 +38,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->query($sql);
         $recipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $subject = "Rappel : Paiement de vos Roses 🌹"; 
-        
-    } else {
-        // --- MODE PERSONNALISÉ (Avec filtre) ---
-        $sql = "SELECT DISTINCT u.email, u.nom, u.prenom 
+
+    } elseif ($mode === 'absent_recipient') {
+        // --- MODE DESTINATAIRES ABSENTS ---
+        // On récupère les acheteurs dont les cadeaux n'ont PAS été distribués
+        $sql = "SELECT 
+                    u.email, u.nom as buyer_nom, u.prenom as buyer_prenom,
+                    r.nom as dest_nom, r.prenom as dest_prenom
                 FROM orders o
-                JOIN users u ON o.user_id = u.user_id";
-
-        // Application du filtre
-        if ($targetFilter === 'paid') {
-            $sql .= " WHERE o.is_paid = 1";
-        } elseif ($targetFilter === 'unpaid') {
-            $sql .= " WHERE o.is_paid = 0";
+                JOIN users u ON o.user_id = u.user_id
+                JOIN order_recipients ort ON o.id = ort.order_id
+                JOIN recipients r ON ort.recipient_id = r.id
+                WHERE o.is_paid = 1 
+                AND ort.is_distributed = 0";
+        
+        $rawResults = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        
+        // REGROUPEMENT PHP : Un acheteur peut avoir plusieurs destinataires absents
+        // On transforme la liste brute en une liste unique par acheteur
+        $groupedBuyers = [];
+        foreach ($rawResults as $row) {
+            $email = $row['email'];
+            if (!isset($groupedBuyers[$email])) {
+                $groupedBuyers[$email] = [
+                    'email' => $email,
+                    'nom' => $row['buyer_nom'],
+                    'prenom' => $row['buyer_prenom'],
+                    'absent_names' => []
+                ];
+            }
+            // On ajoute le nom du destinataire (en évitant les doublons si plusieurs roses pour la même personne)
+            $destFullName = $row['dest_prenom'] . ' ' . $row['dest_nom'];
+            if (!in_array($destFullName, $groupedBuyers[$email]['absent_names'])) {
+                $groupedBuyers[$email]['absent_names'][] = $destFullName;
+            }
         }
-        // Si 'all', on ne met pas de WHERE, on prend tout le monde.
+        
+        $recipients = array_values($groupedBuyers); // On remet en tableau indexé pour la boucle d'envoi
+        $subject = "Information : Vos roses non distribuées 🌹";
 
-        $sql .= " GROUP BY u.user_id";
-                
-        $stmt = $pdo->query($sql);
-        $recipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } else {
+        // --- MODE PERSONNALISÉ ---
+        if ($targetFilter === 'undistributed') {
+            $sql = "SELECT DISTINCT u.email, u.nom, u.prenom 
+                    FROM orders o
+                    JOIN users u ON o.user_id = u.user_id
+                    JOIN order_recipients ort ON o.id = ort.order_id
+                    WHERE o.is_paid = 1 AND ort.is_distributed = 0
+                    GROUP BY u.user_id";
+        } else {
+            $sql = "SELECT DISTINCT u.email, u.nom, u.prenom 
+                    FROM orders o
+                    JOIN users u ON o.user_id = u.user_id";
+            if ($targetFilter === 'paid') $sql .= " WHERE o.is_paid = 1";
+            elseif ($targetFilter === 'unpaid') $sql .= " WHERE o.is_paid = 0";
+            $sql .= " GROUP BY u.user_id";
+        }
+        $recipients = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
         $subject = $customSubject;
     }
 
@@ -70,28 +107,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $nom = htmlspecialchars($row['nom']);
         $emailUser = $row['email'];
 
-        // Détection des erreurs "Pas d'email"
         if (empty($emailUser)) {
             $errorLog[] = "Introuvable : Pas d'adresse email pour <strong>$nom $prenom</strong>.";
             continue;
         }
 
-        // --- CONTENU ---
+        // --- CONSTRUCTION DU CONTENU ---
         $innerContent = "";
         
         if ($mode === 'reminder') {
             $amount = number_format($row['total_due'], 2);
             $innerContent = "
                 <p>Bonjour <strong>$prenom</strong>,</p>
-                <p>DERNIER JOUR ⚠️ ! Sauf erreur de notre part, nous n'avons pas encore reçu le règlement de vos commandes de roses. Faites vite, le paiement de vos commandes s'arrête <strong>ce soir</strong> !</p>
-                
+                <p>DERNIER JOUR ⚠️ ! Sauf erreur de notre part, nous n'avons pas encore reçu le règlement de vos commandes. Le paiement s'arrête <strong>ce soir</strong> !</p>
                 <div style='background-color: #fff0f6; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #d63384;'>
                     <h3 style='margin: 0; color: #d63384;'>Reste à payer : $amount €</h3>
-                    <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Veuillez régler au stand du CVL, dans le hall de la vie scolaire, RDC bâtiment E, aujourd'hui (aux pauses de 10 et 16h et de 12h à 14h).</p>
+                    <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Veuillez régler au stand du CVL (Hall Vie Scolaire Bat E) aujourd'hui.</p>
+                </div>
+                <p>Sans paiement, les commandes seront annulées.</p>
+            ";
+
+        } elseif ($mode === 'absent_recipient') {
+            // Liste des absents pour cet acheteur (ex: "Tom Marescal et Marie Dupont")
+            $namesList = implode(', ', $row['absent_names']);
+            $lastIndex = strrpos($namesList, ', ');
+            if ($lastIndex !== false) {
+                $namesList = substr_replace($namesList, ' et ', $lastIndex, 2);
+            }
+
+            $innerContent = "
+                <p>Bonjour <strong>$prenom</strong>,</p>
+                <p>Nous n'avons pas pu distribuer vos roses à <strong>$namesList</strong> car cette/ces personne(s) étai(en)t absente(s) lors de notre passage.</p>
+                
+                <div style='background-color: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #ffc107;'>
+                    <h3 style='margin: 0; color: #856404; font-size: 1.1em;'>📍 Comment récupérer les fleurs ?</h3>
+                    <p style='margin: 10px 0 0 0; color: #333;'>
+                        Elles ont été déposées à la <strong>Vie Scolaire</strong>.
+                    </p>
+                    <ul style='margin-bottom:0;'>
+                        <li>Soit vous allez les récupérer vous-même.</li>
+                        <li>Soit vous prévenez votre/vos destinataire(s) d'aller les chercher.</li>
+                    </ul>
                 </div>
                 
-                <p>Sans paiement avant la date limite, les commandes seront annulées.</p>
+                <p><strong>⚠️ Attention :</strong> Les roses sont disponibles dès ce <strong>Lundi 16 février</strong>. Ne tardez pas trop à venir les chercher pour éviter qu'elles ne fanent !</p>
             ";
+
         } else {
             // Mode Personnalisé
             $formattedBody = nl2br(htmlspecialchars($customBody));
@@ -132,29 +193,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $mail->send();
             $countSent++;
 
-            // PAUSE ANTI-SPAM : Dort 1 seconde tous les 10 mails pour ne pas bloquer le SMTP
             if ($countSent % 10 == 0) { sleep(1); }
 
         } catch (Exception $e) {
-            // ENREGISTREMENT DE L'ERREUR
             $errorLog[] = "Échec pour <strong>$nom $prenom</strong> ($emailUser) : " . $mail->ErrorInfo;
-            
-            // On réinitialise le mailer en cas de crash critique
             try { $mail = getMailer(); } catch (Exception $ex) {}
         }
     }
     
-    // Message de confirmation adapté
+    // Message de confirmation
     $targetName = "personnes";
     if ($mode === 'reminder') $targetName = "élèves en attente de paiement";
+    elseif ($mode === 'absent_recipient') $targetName = "acheteurs avec destinataires absents";
     elseif ($targetFilter === 'paid') $targetName = "élèves ayant payé";
-    elseif ($targetFilter === 'unpaid') $targetName = "élèves n'ayant pas payé";
+    elseif ($targetFilter === 'undistributed') $targetName = "élèves en attente de distribution";
     elseif ($targetFilter === 'all') $targetName = "tous les acheteurs";
 
-    // Si on a des erreurs, on met un warning, sinon success
     if (!empty($errorLog)) {
         $messageType = "warning";
-        $messageStr = "Envoi terminé avec des erreurs. $countSent emails envoyés sur " . count($recipients) . ".";
+        $messageStr = "Terminé avec erreurs. $countSent envoyés sur " . count($recipients) . ".";
     } else {
         $messageType = "success";
         $messageStr = "$countSent emails envoyés avec succès ($targetName).";
@@ -200,14 +257,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <?php if (!empty($errorLog)): ?>
         <div class="alert alert-danger mt-3">
             <h5><i class="fas fa-bug me-2"></i> Rapport d'erreurs (<?php echo count($errorLog); ?>)</h5>
-            <div class="bg-white p-2 rounded text-danger" style="max-height: 200px; overflow-y: auto; font-size: 0.85rem;">
+            <div class="bg-white p-2 rounded text-danger" style="max-height: 200px; overflow-y: auto;">
                 <ul class="mb-0 ps-3">
                     <?php foreach ($errorLog as $err): ?>
                         <li><?php echo $err; ?></li>
                     <?php endforeach; ?>
                 </ul>
             </div>
-            <small class="mt-2 d-block">Ces utilisateurs n'ont pas reçu le mail.</small>
         </div>
     <?php endif; ?>
 
@@ -217,32 +273,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 <div class="mb-4">
                     <label class="form-label fw-bold">Type de campagne</label>
-                    <div class="btn-group w-100" role="group">
-                        <input type="radio" class="btn-check" name="mode" id="modeReminder" value="reminder" checked onchange="toggleForm()">
-                        <label class="btn btn-outline-danger" for="modeReminder">
-                            <i class="fas fa-hand-holding-usd me-2"></i> Rappel Paiement
-                        </label>
+                    <div class="d-flex flex-column gap-2">
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="mode" id="modeReminder" value="reminder" onchange="toggleForm()">
+                            <label class="btn btn-outline-danger" for="modeReminder">
+                                <i class="fas fa-hand-holding-usd me-2"></i> Rappel Paiement
+                            </label>
 
-                        <input type="radio" class="btn-check" name="mode" id="modeCustom" value="custom" onchange="toggleForm()">
-                        <label class="btn btn-outline-primary" for="modeCustom">
-                            <i class="fas fa-pen-nib me-2"></i> Message Perso
-                        </label>
+                            <input type="radio" class="btn-check" name="mode" id="modeCustom" value="custom" checked onchange="toggleForm()">
+                            <label class="btn btn-outline-primary" for="modeCustom">
+                                <i class="fas fa-pen-nib me-2"></i> Message Perso
+                            </label>
+                        </div>
+                        
+                        <div class="w-100">
+                            <input type="radio" class="btn-check" name="mode" id="modeAbsent" value="absent_recipient" onchange="toggleForm()">
+                            <label class="btn btn-outline-warning w-100" for="modeAbsent">
+                                <i class="fas fa-user-clock me-2"></i> 🌹 Destinataires Absents (Retardataires)
+                            </label>
+                        </div>
                     </div>
                 </div>
 
-                <div id="reminderInfo" class="alert alert-light border">
+                <div id="reminderInfo" class="alert alert-light border" style="display:none;">
                     <h6 class="text-danger"><i class="fas fa-info-circle me-1"></i> Rappel automatique</h6>
                     <small class="text-muted">Envoie le montant restant dû à tous les élèves qui n'ont pas encore payé.</small>
                 </div>
 
-                <div id="customFields" style="display: none;">
-                    
+                <div id="absentInfo" class="alert alert-light border" style="display:none;">
+                    <h6 class="text-warning"><i class="fas fa-info-circle me-1"></i> Notification post-distribution</h6>
+                    <small class="text-muted">
+                        Envoie un mail à l'ACHETEUR pour lui dire que son destinataire était absent.<br>
+                        Le mail liste automatiquement les noms des absents concernés et indique d'aller à la Vie Scolaire.
+                    </small>
+                </div>
+
+                <div id="customFields">
                     <div class="mb-3">
                         <label class="form-label fw-bold">Qui doit recevoir ce message ?</label>
                         <select name="target_filter" class="form-select border-primary">
                             <option value="all">👥 Tout le monde (Tous ceux qui ont commandé)</option>
                             <option value="paid">✅ Uniquement ceux qui ont PAYÉ</option>
                             <option value="unpaid">⚠️ Uniquement ceux qui n'ont PAS PAYÉ</option>
+                            <option value="undistributed">🚚 Non Distribués (Payés mais pas reçus)</option>
                         </select>
                     </div>
 
@@ -267,10 +340,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 <script>
     function toggleForm() {
-        const isCustom = document.getElementById('modeCustom').checked;
-        document.getElementById('reminderInfo').style.display = isCustom ? 'none' : 'block';
-        document.getElementById('customFields').style.display = isCustom ? 'block' : 'none';
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        
+        // Gestion des affichages
+        document.getElementById('reminderInfo').style.display = (mode === 'reminder') ? 'block' : 'none';
+        document.getElementById('absentInfo').style.display = (mode === 'absent_recipient') ? 'block' : 'none';
+        
+        // Le formulaire perso ne s'affiche que si on est en mode "custom"
+        document.getElementById('customFields').style.display = (mode === 'custom') ? 'block' : 'none';
     }
+    
+    // Init au chargement
+    toggleForm();
 </script>
 
 </body>
