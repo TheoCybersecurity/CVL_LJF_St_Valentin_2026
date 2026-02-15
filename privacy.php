@@ -1,5 +1,15 @@
 <?php
-// privacy.php
+/**
+ * Politique de Confidentialité & Transparence
+ * privacy.php
+ * Ce fichier est accessible publiquement et sert de référence RGPD simplifiée.
+ * Il détaille :
+ * 1. La nature et la source des données collectées (Import Pronote/Utilisateurs).
+ * 2. L'infrastructure technique et les mesures de sécurité (Souveraineté, Chiffrement).
+ * 3. La matrice des droits d'accès (Qui voit quoi ?).
+ * 4. Les aspects légaux (Propriété intellectuelle et cycle de vie des données).
+ */
+
 session_start();
 require_once 'db.php';
 ?>
@@ -10,31 +20,36 @@ require_once 'db.php';
     <title>Confidentialité & Données - St Valentin</title>
     <?php include 'head_imports.php'; ?>
     <style>
-        /* Réutilisation du style About pour la cohérence */
+        /* --- Styles Généraux --- */
         body { background-color: #f8f9fa; }
         
+        /* Titre avec dégradé */
         .hero-title {
             background: -webkit-linear-gradient(45deg, #198754, #0d6efd);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
+        /* Cartes interactives */
         .card-custom {
             border: none;
             border-radius: 12px;
-            transition: transform 0.2s;
+            transition: transform 0.2s, box-shadow 0.2s;
             height: 100%;
+            background: white;
         }
         .card-custom:hover {
             transform: translateY(-3px);
+            box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important;
         }
 
-        /* Codes Couleurs par section */
+        /* --- Codes Couleurs & Bordures --- */
         .section-data { border-left: 5px solid #0d6efd; }       /* Bleu : Données */
         .section-security { border-left: 5px solid #198754; }    /* Vert : Sécurité */
         .section-access { border-left: 5px solid #dc3545; }      /* Rouge : Accès */
         .section-license { border-left: 5px solid #6610f2; }     /* Violet : Droit/Licence */
 
+        /* --- Icônes --- */
         .icon-box {
             width: 50px; 
             height: 50px; 
@@ -52,6 +67,7 @@ require_once 'db.php';
         .bg-red-light { background-color: #f8d7da; color: #842029; }
         .bg-purple-light { background-color: #e0cffc; color: #6610f2; }
 
+        /* Badge Source de données */
         .pronote-badge {
             background-color: #6f42c1;
             color: white;
@@ -59,6 +75,7 @@ require_once 'db.php';
             border-radius: 4px;
             font-size: 0.8em;
             font-weight: bold;
+            letter-spacing: 0.5px;
         }
     </style>
 </head>
@@ -91,15 +108,16 @@ require_once 'db.php';
                         <h6 class="fw-bold text-primary">Sur l'Acheteur (Vous)</h6>
                         <ul class="text-muted small mb-0">
                             <li><strong>Identité :</strong> Nom, Prénom, Classe.</li>
-                            <li><strong>Objectif :</strong> Assurer la traçabilité financière de la commande et vous contacter en cas de problème.</li>
+                            <li><strong>Objectif :</strong> Assurer la traçabilité financière de la commande et vous contacter en cas de problème de paiement.</li>
+                            <li><strong>Conservation :</strong> Jusqu'à la fin de l'événement.</li>
                         </ul>
                     </div>
                     <div class="col-md-6">
                         <h6 class="fw-bold text-danger">Sur le Destinataire</h6>
                         <ul class="text-muted small mb-2">
                             <li><strong>Identité :</strong> Nom, Prénom, Classe.</li>
-                            <li><strong>Logistique :</strong> Emploi du temps (pour vous trouver le jour J) et contenu de la commande (nombre de roses, message).</li>
-                            <li><strong>Statut :</strong> Choix de l'anonymat (Oui/Non).</li>
+                            <li><strong>Logistique :</strong> Emploi du temps (Salle/Heure) pour la livraison.</li>
+                            <li><strong>Statut :</strong> Choix de l'anonymat (Optionnel).</li>
                         </ul>
                     </div>
                 </div>
@@ -132,15 +150,15 @@ require_once 'db.php';
                 </p>
 
                 <ul class="list-group list-group-flush small">
-                    <li class="list-group-item bg-transparent px-0">
+                    <li class="list-group-item bg-transparent px-0 border-0 mb-2">
                         <i class="fas fa-hdd text-success me-2"></i>
                         <strong>Auto-Hébergement :</strong> Les données sont stockées sur un serveur privé sécurisé, administré par le développeur (Théo Marescal).
                     </li>
-                    <li class="list-group-item bg-transparent px-0">
+                    <li class="list-group-item bg-transparent px-0 border-0 mb-2">
                         <i class="fas fa-lock text-success me-2"></i>
-                        <strong>Protection :</strong> Mots de passe hachés, pare-feu strict et connexion chiffrée (HTTPS).
+                        <strong>Protection :</strong> Mots de passe hachés (bcrypt), pare-feu strict et connexion chiffrée (HTTPS/SSL).
                     </li>
-                    <li class="list-group-item bg-transparent px-0">
+                    <li class="list-group-item bg-transparent px-0 border-0">
                         <i class="fas fa-cloud-upload-alt text-success me-2"></i>
                         <strong>Sauvegardes :</strong> Les backups sont <strong>chiffrés</strong> avant d'être envoyés sur un stockage de secours, garantissant qu'ils sont illisibles par autrui.
                     </li>
@@ -166,10 +184,11 @@ require_once 'db.php';
                         </h2>
                         <div id="access1" class="accordion-collapse collapse show" data-bs-parent="#accordionAccess">
                             <div class="accordion-body px-0 py-2 small text-muted">
-                                Ils ont accès aux listes de distribution (Nom, Prénom, Classe, Salle) pour préparer les commandes et livrer les roses.
+                                Ils ont accès aux listes de distribution (Nom, Prénom, Classe, Salle) pour préparer les commandes et livrer les roses. Ils ne voient pas les messages si l'option "Anonyme" est activée.
                             </div>
                         </div>
                     </div>
+
                     <div class="accordion-item bg-transparent">
                         <h2 class="accordion-header">
                             <button class="accordion-button collapsed bg-transparent shadow-none px-0 fw-bold" type="button" data-bs-toggle="collapse" data-bs-target="#access2">
@@ -178,10 +197,11 @@ require_once 'db.php';
                         </h2>
                         <div id="access2" class="accordion-collapse collapse" data-bs-parent="#accordionAccess">
                             <div class="accordion-body px-0 py-2 small text-muted">
-                                En tant que responsable de l'infrastructure, j'ai un accès technique global pour assurer la maintenance du site. Cet accès n'est pas utilisé pour consulter les messages privés, sauf nécessité technique absolue.
+                                En tant que responsable de l'infrastructure, j'ai un accès technique global pour assurer la maintenance du site. Cet accès n'est pas utilisé pour consulter les données personnelles, sauf nécessité technique absolue (bug critique).
                             </div>
                         </div>
                     </div>
+
                     <div class="accordion-item bg-transparent">
                         <h2 class="accordion-header">
                             <button class="accordion-button collapsed bg-transparent shadow-none px-0 fw-bold" type="button" data-bs-toggle="collapse" data-bs-target="#access3">
@@ -210,20 +230,20 @@ require_once 'db.php';
                 </div>
 
                 <div class="row">
-                    <div class="col-md-7">
+                    <div class="col-md-7 mb-3 mb-md-0">
                         <h6 class="fw-bold">Cycle de vie des données</h6>
                         <p class="small text-muted">
-                            Ce projet est éphémère. À l'issue de l'événement :
+                            Ce projet est éphémère. À l'issue de l'événement (fin février) :
                         </p>
                         <ul class="small text-muted">
                             <li>Les accès des membres du CVL seront révoqués.</li>
-                            <li>Les données réelles seront archivées hors-ligne par l'administrateur à des fins de sécurité, puis anonymisées.</li>
+                            <li>Les données réelles seront archivées hors-ligne par l'administrateur à des fins de sécurité (historique comptable), puis supprimées du serveur.</li>
                             <li>Le code source sera rendu public (Open Source) avec uniquement des données fictives.</li>
                         </ul>
                     </div>
                     
                     <div class="col-md-5 border-start-md">
-                        <div class="bg-light p-3 rounded border">
+                        <div class="bg-light p-3 rounded border h-100">
                             <h6 class="fw-bold text-dark"><i class="fas fa-copyright me-2"></i>Licence d'utilisation</h6>
                             <p class="small mb-2" style="font-size: 0.85rem; text-align: justify;">
                                 Le code source de ce site est la propriété intellectuelle de <strong>Théo Marescal</strong>.

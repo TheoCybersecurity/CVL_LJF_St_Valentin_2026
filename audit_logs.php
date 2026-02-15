@@ -1,16 +1,34 @@
 <?php
-// audit_logs.php
+/**
+ * Administration - Journal d'Audit Technique (Logs)
+ * audit_logs.php
+ * * Ce module permet de visualiser l'historique détaillé des actions sensibles effectuées sur l'application.
+ * Il trace les modifications de données, les connexions et les opérations critiques pour des raisons de sécurité et de débogage.
+ *
+ * Fonctionnalités :
+ * - Filtrage par administrateur, type d'action et recherche textuelle.
+ * - Visualisation des différences (Old Value / New Value) via une modale JSON.
+ * - Identification technique (IP, User Agent).
+ */
+
 require_once 'db.php';
 require_once 'auth_check.php';
 
-checkAccess('admin'); // Sécurité maximale
+// Vérification stricte des droits d'accès (Admin uniquement)
+checkAccess('admin');
 
-// --- 1. FILTRES ---
+// =================================================================
+// 1. GESTION DES FILTRES DE RECHERCHE
+// =================================================================
 $filterAdmin = $_GET['admin'] ?? '';
 $filterAction = $_GET['action'] ?? '';
 $search = $_GET['q'] ?? '';
 
-// --- 2. REQUÊTE SQL ---
+// =================================================================
+// 2. CONSTRUCTION ET EXÉCUTION DE LA REQUÊTE SQL
+// =================================================================
+
+// Requête de base avec jointure pour obtenir l'identité de l'auteur de l'action
 $sql = "
     SELECT 
         al.*,
@@ -22,6 +40,7 @@ $sql = "
 
 $params = [];
 
+// Application des filtres conditionnels
 if (!empty($filterAdmin)) {
     $sql .= " AND al.user_id = ? ";
     $params[] = $filterAdmin;
@@ -39,17 +58,24 @@ if (!empty($search)) {
     $params[] = "%$search%";
 }
 
-$sql .= " ORDER BY al.created_at DESC LIMIT 200"; // Limite pour la performance
+// Tri par date décroissante et limitation pour préserver les performances d'affichage
+$sql .= " ORDER BY al.created_at DESC LIMIT 200";
 
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Listes pour les filtres (select)
+// =================================================================
+// 3. PRÉPARATION DES DONNÉES AUXILIAIRES (Listes déroulantes)
+// =================================================================
 $admins = $pdo->query("SELECT DISTINCT u.user_id, u.nom, u.prenom FROM audit_logs al JOIN users u ON al.user_id = u.user_id ORDER BY u.nom")->fetchAll(PDO::FETCH_ASSOC);
 $actions = $pdo->query("SELECT DISTINCT action FROM audit_logs ORDER BY action")->fetchAll(PDO::FETCH_COLUMN);
 
-// Fonction simple pour rendre le UserAgent lisible
+/**
+ * Analyse basique du User Agent pour afficher une icône OS/Device.
+ * @param string $ua Chaîne User Agent brute.
+ * @return string HTML avec icônes FontAwesome.
+ */
 function parseUserAgent($ua) {
     if (empty($ua)) return 'Inconnu';
     $os = 'Autre';
@@ -156,6 +182,7 @@ function parseUserAgent($ua) {
 
                             <td>
                                 <?php 
+                                    // Code couleur conditionnel selon le type d'action
                                     $badgeClass = 'bg-secondary';
                                     if(strpos($log['action'], 'DELETE') !== false) $badgeClass = 'bg-danger';
                                     elseif(strpos($log['action'], 'UPDATE') !== false) $badgeClass = 'bg-warning text-dark';
@@ -186,7 +213,7 @@ function parseUserAgent($ua) {
                                     <button class="btn btn-sm btn-outline-primary btn-view-diff" 
                                             data-bs-toggle="modal" 
                                             data-bs-target="#modalDiff"
-                                            /* AJOUT DE "?? ''" POUR EVITER LE NULL */
+                                            /* Protection contre les valeurs NULL lors de l'injection dans les attributs data */
                                             data-old='<?php echo htmlspecialchars($log['old_value'] ?? '', ENT_QUOTES); ?>'
                                             data-new='<?php echo htmlspecialchars($log['new_value'] ?? '', ENT_QUOTES); ?>'>
                                         <i class="fas fa-code-branch"></i> Diff
@@ -232,7 +259,7 @@ function parseUserAgent($ua) {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    // Petit script JS pour formater le JSON joliment dans la modale
+    // Gestionnaire d'événement pour l'affichage de la modale Diff
     const diffModal = document.getElementById('modalDiff');
     diffModal.addEventListener('show.bs.modal', function (event) {
         const button = event.relatedTarget;
@@ -241,14 +268,14 @@ function parseUserAgent($ua) {
         let newVal = button.getAttribute('data-new');
 
         try {
-            // Tente de parser et de "pretty print" le JSON
+            // Tentative de formatage "Pretty Print" du JSON pour la lisibilité
             const oldObj = oldVal ? JSON.parse(oldVal) : null;
             const newObj = newVal ? JSON.parse(newVal) : null;
             
             document.getElementById('jsonOld').textContent = oldObj ? JSON.stringify(oldObj, null, 4) : "Aucune donnée";
             document.getElementById('jsonNew').textContent = newObj ? JSON.stringify(newObj, null, 4) : "Aucune donnée";
         } catch (e) {
-            // Si ce n'est pas du JSON valide, on affiche le texte brut
+            // Fallback : Affichage brut si le contenu n'est pas un JSON valide
             document.getElementById('jsonOld').textContent = oldVal || "Aucune donnée";
             document.getElementById('jsonNew').textContent = newVal || "Aucune donnée";
         }

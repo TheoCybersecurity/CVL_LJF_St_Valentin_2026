@@ -107,7 +107,7 @@ try {
 // D. Panier moyen (Roses vendues / Commandes payées)
 // Sécurité : on s'assure que $nbPaid est défini (au cas où il manquerait plus haut)
 if (!isset($nbPaid)) {
-    $nbPaid = $pdo->query("SELECT COUNT(*) FROM orders WHERE")->fetchColumn();
+    $nbPaid = $pdo->query("SELECT COUNT(*) FROM orders WHERE is_paid = 1")->fetchColumn();
 }
 $avgBasket = ($nbPaid > 0) ? number_format($totalRosesVendues / $nbPaid, 1) : 0;
 
@@ -134,7 +134,7 @@ try {
                     LIMIT 1";
     $stmtTopClass = $pdo->query($sqlTopClass);
     $topClassData = $stmtTopClass->fetch(PDO::FETCH_ASSOC);
-    
+     
     if ($topClassData) {
         $topClassName = htmlspecialchars($topClassData['name']);
         $topClassCount = $topClassData['order_count'];
@@ -169,18 +169,7 @@ try {
 }
 
 // --- COULEURS & TOTAL ROSES ---
-$statsColors = [];
-try {
-    $sqlColors = "SELECT p.name, SUM(rr.quantity) as count 
-                  FROM recipient_roses rr 
-                  JOIN rose_products p ON rr.rose_product_id = p.id 
-                  JOIN order_recipients orc ON rr.recipient_id = orc.id 
-                  JOIN orders o ON orc.order_id = o.id 
-                  GROUP BY p.id 
-                  ORDER BY count DESC";
-    $statsColors = $pdo->query($sqlColors)->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) { $statsColors = []; }
-
+// (Note: $statsColors déjà calculé plus haut, mais on garde la logique de ton fichier original si redondante)
 $totalRoses = 0;
 foreach ($statsColors as $c) { $totalRoses += $c['count']; }
 
@@ -193,7 +182,7 @@ try {
                      JOIN order_recipients orc ON rr.recipient_id = orc.id 
                      JOIN orders o ON orc.order_id = o.id 
                      WHERE o.is_paid = 1";
-    
+     
     $totalRosesVendues = $pdo->query($sqlPaidRoses)->fetchColumn();
 
     if (!$totalRosesVendues) { $totalRosesVendues = 0; }
@@ -251,7 +240,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
             $targetDate = substr($viewMode, 5);
             $chartTitle = "Activité du " . date('d/m/Y', strtotime($targetDate));
             for($i=0; $i<=23; $i++) { $chartData[$i.'h'] = 0; }
-            $sqlChart = "SELECT HOUR(created_at) as h, COUNT(*) as c FROM orders AND DATE(created_at) = ? GROUP BY h";
+            $sqlChart = "SELECT HOUR(created_at) as h, COUNT(*) as c FROM orders WHERE DATE(created_at) = ? GROUP BY h";
             $stmtChart = $pdo->prepare($sqlChart);
             $stmtChart->execute([$targetDate]);
             while($row = $stmtChart->fetch(PDO::FETCH_ASSOC)) {
@@ -603,7 +592,7 @@ function renderChartContent($pdo, $viewMode, $availableDates) {
             </div>
         </div>
     </div>
-    
+
     <div class="row g-3 mb-4">
         <div class="col-lg-3 col-md-6">
             <div class="card border-0 shadow-sm h-100 bg-gradient-gold">

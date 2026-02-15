@@ -1,9 +1,16 @@
 <?php
-// admin.php (HUB CENTRAL)
+/**
+ * Tableau de bord Administrateur (Hub Central)
+ * admin.php
+ * * Ce fichier sert de portail d'accès à l'ensemble des modules d'administration.
+ * Il présente une interface sous forme de tuiles (Dashboard) redirigeant vers
+ * les fonctionnalités spécifiques (Gestion des commandes, Configuration, Logs, etc.).
+ */
+
 require_once 'db.php';
 require_once 'auth_check.php'; 
 
-// Seuls les "admin" peuvent accéder
+// Vérification stricte des droits d'accès (Rôle 'admin' requis)
 checkAccess('admin');
 ?>
 <!DOCTYPE html>
@@ -12,23 +19,23 @@ checkAccess('admin');
     <title>Super Admin - Hub</title>
     <?php include 'head_imports.php'; ?>
     <style>
-        /* CSS POUR LE LIEN BLOC */
+        /* Styles : Comportement des liens-blocs (Cards cliquables) */
         .block-link {
-            text-decoration: none; /* Pas de soulignement */
-            color: inherit; /* Garde la couleur du texte originale */
-            display: block; /* Prend toute la place */
+            text-decoration: none; /* Suppression du soulignement standard */
+            color: inherit; /* Héritage de la couleur du texte parent */
+            display: block; /* La zone cliquable occupe tout le conteneur */
         }
         .block-link:hover {
-            color: inherit; /* Evite que le texte devienne bleu au survol */
+            color: inherit; /* Maintien de la couleur au survol */
         }
 
-        /* ANIMATION DE LA CARTE */
+        /* Styles : Animations et transitions visuelles */
         .hover-card {
             transition: transform 0.3s ease, box-shadow 0.3s ease;
             border: none;
         }
 
-        /* L'animation se déclenche quand on survole le LIEN (.block-link) */
+        /* Déclencheur : Effet d'élévation et d'ombre au survol de la carte complète */
         .block-link:hover .hover-card {
             transform: translateY(-5px); 
             box-shadow: 0 10px 20px rgba(0,0,0,0.15) !important;

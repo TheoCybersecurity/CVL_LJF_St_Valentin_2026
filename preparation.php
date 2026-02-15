@@ -1,13 +1,27 @@
 <?php
-// preparation.php
+/**
+ * Interface de Gestion des Préparations (Back-Office CVL)
+ * preparation.php
+ * Ce fichier permet aux membres du CVL de gérer la confection physique des bouquets.
+ * Il gère :
+ * 1. Le traitement des actions de validation (marquer comme prêt/annuler).
+ * 2. La récupération et le filtrage des commandes (par niveau, statut, recherche).
+ * 3. L'organisation visuelle des données (Regroupement par Classe > Élève).
+ * 4. L'interface utilisateur réactive (AJAX et Toasts).
+ */
+
 require_once 'db.php';
 require_once 'auth_check.php';
 require_once 'logger.php';
 checkAccess('cvl');
 
-// --- 1. TRAITEMENT DES ACTIONS (POST) ---
+// ====================================================
+// 1. TRAITEMENT DES ACTIONS (POST & AJAX)
+// ====================================================
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
     
+    // Nettoyage et typage des IDs reçus
     $ids = explode(',', $_POST['recipient_ids']);
     $ids = array_map('intval', $ids);
     
@@ -15,9 +29,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
     $actionType = ''; 
 
     if (!empty($ids)) {
+        // Préparation de la clause SQL "IN"
         $inQuery = implode(',', array_fill(0, count($ids), '?'));
         
         if (isset($_POST['mark_prepared'])) {
+            // Action : Valider la préparation
             $now = date('Y-m-d H:i:s');
 
             $sql = "UPDATE order_recipients 
@@ -29,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
             $actionType = 'marked';
             
         } elseif (isset($_POST['unmark_prepared'])) {
+            // Action : Annuler (Remise en file d'attente)
             $sql = "UPDATE order_recipients 
                     SET is_prepared = 0, 
                         prepared_at = NULL, 
@@ -42,14 +59,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
 
-            // =================================================================
-            // AJOUT TRACABILITÉ (PREPARATION)
-            // =================================================================
+            // ====================================================
+            // 1.1. TRAÇABILITÉ (LOGS)
+            // ====================================================
             foreach ($ids as $giftId) {
-                // $giftId correspond à l'ID dans order_recipients
-                
                 if ($actionType === 'marked') {
-                    // Action : On vient de marquer comme PRÊT
                     logAction(
                         $currentCvlId, 
                         'order_recipient', 
@@ -60,7 +74,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
                         "Cadeau marqué comme prêt"
                     );
                 } elseif ($actionType === 'unmarked') {
-                    // Action : On vient d'annuler (remis en attente)
                     logAction(
                         $currentCvlId, 
                         'order_recipient', 
@@ -73,9 +86,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
                 }
             }
 
-            // --- DEBUT MODIFICATION AJAX ---
+            // ====================================================
+            // 1.2. RÉPONSE ASYNCHRONE (AJAX)
+            // ====================================================
             if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                // Définition du message et de l'action inverse
+                // Définition du message utilisateur et de l'action "Annuler" possible
                 if ($actionType === 'marked') {
                     $msg = "Cadeau marqué comme prêt !";
                     $undoAction = 'unmark_prepared';
@@ -92,13 +107,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
                         'ids' => $_POST['recipient_ids']
                     ]
                 ]);
-                exit;
+                exit; // Fin du script pour requête AJAX
             }
-            // --- FIN MODIFICATION AJAX ---
         }
     }
     
-    // Redirection classique (si JS désactivé)
+    // Fallback : Redirection classique si JS désactivé
     $queryParams = $_GET;
     $queryParams['last_action'] = $actionType;
     $queryParams['last_ids'] = implode(',', $ids);
@@ -107,13 +121,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recipient_ids'])) {
     exit;
 }
 
-// --- 2. GESTION DES VUES & FILTRES ---
-$view = isset($_GET['view']) ? $_GET['view'] : 'todo';
-$levelFilter = isset($_GET['level']) ? $_GET['level'] : 'all';
+// ====================================================
+// 2. GESTION DES VUES ET FILTRES (GET)
+// ====================================================
+$view = isset($_GET['view']) ? $_GET['view'] : 'todo'; // Vue par défaut : "À faire"
+$levelFilter = isset($_GET['level']) ? $_GET['level'] : 'all'; // Filtre par défaut : Tous niveaux
 
-// --- 3. REQUÊTE SQL ---
+// ====================================================
+// 3. RÉCUPÉRATION DES DONNÉES (SQL)
+// ====================================================
 $search = isset($_GET['q']) ? trim($_GET['q']) : '';
 
+// Requête principale : Jointure complète (Commandes -> Élèves -> Classes -> Produits)
 $sql = "
     SELECT 
         ort.id as unique_gift_id, 
@@ -140,16 +159,19 @@ $sql = "
     WHERE o.is_paid = 1 
 ";
 
+// Filtre sur le statut de préparation
 if ($view === 'done') {
     $sql .= " AND ort.is_prepared = 1 ";
 } else {
     $sql .= " AND ort.is_prepared = 0 ";
 }
 
+// Filtre sur le niveau de classe (2nde, 1ere, Term...)
 if ($levelFilter !== 'all') {
     $sql .= " AND cl.group_alias = :filter ";
 }
 
+// Filtre de recherche textuelle (Multi-champs)
 if (!empty($search)) {
     $sql .= " AND (
         r.nom LIKE :s OR 
@@ -162,10 +184,11 @@ if (!empty($search)) {
     ) ";
 }
 
+// Tri des résultats
 if ($view === 'done') {
-    $sql .= " ORDER BY ort.prepared_at DESC "; 
+    $sql .= " ORDER BY ort.prepared_at DESC "; // Chronologique inverse pour l'historique
 } else {
-    $sql .= " ORDER BY c.name ASC, r.nom ASC, r.prenom ASC ";
+    $sql .= " ORDER BY c.name ASC, r.nom ASC, r.prenom ASC "; // Alphabétique pour la logistique
 }
 
 $stmt = $pdo->prepare($sql);
@@ -176,7 +199,10 @@ if (!empty($search)) $params[':s'] = '%' . $search . '%';
 $stmt->execute($params);
 $rawResults = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// --- 4. REGROUPEMENT ---
+// ====================================================
+// 4. STRUCTURATION DES DONNÉES (POUR L'AFFICHAGE)
+// ====================================================
+// Transformation du résultat plat SQL en tableau hiérarchique : Classe -> Élève -> Roses
 $groupedByClass = [];
 $totalRoses = 0;
 
@@ -184,13 +210,14 @@ foreach ($rawResults as $row) {
     $className = $row['class_name'] ?? 'Sans Classe';
     $studentId = $row['student_id']; 
     
+    // Initialisation du groupe "Élève" s'il n'existe pas
     if (!isset($groupedByClass[$className][$studentId])) {
         $groupedByClass[$className][$studentId] = [
             'name' => $row['dest_prenom'] . ' ' . $row['dest_nom'],
             'prepared_at' => $row['prepared_at'], 
             'preparator_id' => $row['prepared_by_cvl_id'],
-            'ids' => [], 
-            'items' => [] 
+            'ids' => [], // Liste des IDs de "order_recipients" regroupés
+            'items' => [] // Détails visuels des roses
         ];
     }
     
@@ -209,6 +236,7 @@ foreach ($rawResults as $row) {
     <title>Preparation - CVL</title>
     <?php include 'head_imports.php'; ?>
     <style>
+        /* Styles spécifiques à l'interface de préparation */
         body { background: #f0f2f5; padding-bottom: 50px; overflow-x: hidden; }
         .class-header { background: #4a4e69; color: white; padding: 10px 15px; border-radius: 8px 8px 0 0; margin-top: 30px; font-weight: bold; letter-spacing: 1px; }
         .class-header.history { background: #6c757d; }
@@ -217,18 +245,24 @@ foreach ($rawResults as $row) {
         .badge-id { font-family: monospace; font-size: 0.9em; background: #e9ecef; color: #333; border: 1px solid #ccc; }
         .rose-item { border-bottom: 1px dashed #eee; padding: 8px 0; }
         .rose-item:last-child { border-bottom: none; }
+        
+        /* Badges couleurs des roses */
         .badge-rose-rouge { background-color: #dc3545; color: white; }
         .badge-rose-blanche { background-color: #ffffff; color: #212529; border: 1px solid #ced4da; }
         .badge-rose-pink { background-color: #ffc2d1; color: #880e4f; }
+        
+        /* Navigation par onglets */
         .nav-tabs .nav-link { color: #495057; font-weight: bold; cursor: pointer; }
         .nav-tabs .nav-link.active { color: #d63384; border-bottom: 3px solid #d63384; background: transparent; }
         
+        /* Scroll horizontal pour filtres mobiles */
         .scroll-container {
             overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; padding-bottom: 5px;
             scrollbar-width: none; -ms-overflow-style: none;
         }
         .scroll-container::-webkit-scrollbar { display: none; }
 
+        /* Menu PDF personnalisé */
         .pdf-dropdown-menu {
             background-color: #fff !important; border: 1px solid rgba(0,0,0,.15); border-radius: 0.375rem;
             box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15); position: absolute !important;
@@ -341,6 +375,7 @@ foreach ($rawResults as $row) {
                 
                 <div class="bg-white p-3 border rounded-bottom mb-4">
                     <?php foreach ($students as $studentId => $student): ?>
+                        
                         <div id="student-card-<?php echo $studentId; ?>" class="card student-card <?php echo $view === 'done' ? 'done' : ''; ?>">
                             <div class="card-body">
                                 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -354,6 +389,7 @@ foreach ($rawResults as $row) {
                                             </small>
                                         <?php endif; ?>
                                     </div>
+                                    
                                     <form method="POST" class="ajax-form">
                                         <input type="hidden" name="recipient_ids" value="<?php echo implode(',', $student['ids']); ?>">
                                         <input type="hidden" name="student_id" value="<?php echo $studentId; ?>">
@@ -368,6 +404,7 @@ foreach ($rawResults as $row) {
                                         <?php endif; ?>
                                     </form>
                                 </div>
+
                                 <div class="bg-light p-2 rounded border">
                                     <?php foreach ($student['items'] as $item): ?>
                                         <?php
@@ -407,12 +444,15 @@ foreach ($rawResults as $row) {
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
-// Fonction pour effectuer l'annulation (UNDO)
+/**
+ * Effectue l'action inverse (Undo) via AJAX.
+ * Recharge la page au succès pour restaurer l'état visuel correct.
+ */
 function performUndo(actionName, ids) {
     const formData = new FormData();
     formData.append('ajax', '1');
     formData.append('recipient_ids', ids);
-    formData.append(actionName, '1'); // On active l'action inverse
+    formData.append(actionName, '1');
 
     fetch('preparation', {
         method: 'POST',
@@ -421,19 +461,20 @@ function performUndo(actionName, ids) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            // Rechargement pour remettre les éléments à leur place
             location.reload();
         }
     })
     .catch(console.error);
 }
 
-// Fonction pour afficher un Toast IDENTIQUE à toast_notifications.php
+/**
+ * Affiche une notification Toast avec un bouton d'annulation.
+ * Le style est identique aux toasts PHP générés dans toast_notifications.php.
+ */
 function showAjaxToastWithUndo(message, undoInfo = null) {
     const container = document.getElementById('js-toast-container') || document.body;
     const toastId = 'toast-ajax-' + Date.now();
     
-    // Construction du bouton Annuler (Structure identique à votre <form> PHP)
     let undoButtonHtml = '';
     if (undoInfo) {
         undoButtonHtml = `
@@ -445,20 +486,15 @@ function showAjaxToastWithUndo(message, undoInfo = null) {
         `;
     }
 
-    // Structure HTML STRICTEMENT identique à toast_notifications.php
-    // J'ai juste ajouté style="max-width: 500px" pour éviter le retour à la ligne
     const toastHtml = `
         <div id="${toastId}" class="toast fade align-items-center text-white bg-dark border-0 position-relative" 
              role="alert" aria-live="assertive" aria-atomic="true" 
              style="max-width: 500px;">
-            
             <div class="d-flex">
                 <div class="toast-body text-nowrap">
                     <i class="fas fa-check-circle text-success me-2"></i> ${message}
                 </div>
-                
                 ${undoButtonHtml}
-                
                 <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
             </div>
             <div class="progress-track"><div class="progress-fill"></div></div>
@@ -468,7 +504,6 @@ function showAjaxToastWithUndo(message, undoInfo = null) {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = toastHtml;
     const toastElement = tempDiv.firstElementChild;
-    
     container.appendChild(toastElement);
     
     const toast = new bootstrap.Toast(toastElement, { delay: 5000 });
@@ -491,6 +526,7 @@ function showAjaxToastWithUndo(message, undoInfo = null) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Délégation d'événement pour gérer tous les formulaires AJAX de la page
     document.body.addEventListener('submit', function(e) {
         if (e.target.classList.contains('ajax-form')) {
             e.preventDefault();
@@ -514,37 +550,34 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    // 1. Notification avec style identique
                     showAjaxToastWithUndo(data.message, data.undo_info);
 
-                    // 2. Gestion de l'affichage
                     if(card) {
+                        // Animation de sortie
                         card.style.transition = "all 0.4s ease";
                         card.style.transform = "translateX(50px)";
                         card.style.opacity = "0";
                         
                         setTimeout(() => {
                             card.style.display = 'none';
-                            card.classList.remove('student-card'); // Important pour le compte
+                            card.classList.remove('student-card');
 
                             if (classGroup) {
-                                // Vérification s'il reste des cartes visibles
+                                // Si le groupe est vide, on le supprime aussi
                                 const remainingCards = classGroup.querySelectorAll('.student-card');
                                 
                                 if (remainingCards.length === 0) {
-                                    // Plus d'élèves dans cette classe -> On supprime tout le bloc
                                     classGroup.style.transition = "all 0.5s ease";
                                     classGroup.style.opacity = "0";
                                     classGroup.style.height = "0";
                                     setTimeout(() => {
                                         classGroup.remove();
-                                        // Si plus aucune classe sur la page -> reload
                                         if (document.querySelectorAll('.class-group-wrapper').length === 0) {
                                             location.reload();
                                         }
                                     }, 500);
                                 } else {
-                                    // Mise à jour du badge compteur
+                                    // Mise à jour du compteur d'élèves
                                     const badge = classGroup.querySelector('.student-count');
                                     if(badge) badge.textContent = remainingCards.length + " élèves";
                                     card.remove(); 

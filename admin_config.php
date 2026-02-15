@@ -1,29 +1,63 @@
 <?php
-// admin_config.php
+/**
+ * Administration - Configuration Système & Données Statiques
+ * admin_config.php
+ * * Ce module centralise la gestion de toutes les données référentielles du site.
+ * Il permet à l'administrateur de gérer :
+ * 1. L'état global de la boutique (Ouverture/Fermeture des ventes).
+ * 2. Le catalogue produits (Variétés de roses) et la grille tarifaire.
+ * 3. La structure scolaire (Classes, Niveaux).
+ * 4. L'infrastructure physique (Bâtiments, Étages, Salles).
+ * 5. La communication (Messages prédéfinis).
+ */
+
 require_once 'db.php';
 require_once 'auth_check.php';
 
+// Vérification des droits d'accès (Administrateur uniquement)
 checkAccess('admin');
 
-// --- FONCTIONS UTILITAIRES ---
+// =================================================================
+// FONCTIONS UTILITAIRES
+// =================================================================
+
+/**
+ * Redirige l'utilisateur vers un onglet spécifique pour conserver le contexte.
+ * @param string $tab L'identifiant de l'onglet cible (ex: 'roses', 'classes').
+ */
 function redirect($tab) {
     header("Location: admin_config.php?tab=" . $tab);
     exit;
 }
 
+/**
+ * Définit un message de notification flash (Toast) en session.
+ * @param string $type Type d'alerte ('success', 'warning', 'danger').
+ * @param string $msg Contenu du message.
+ */
 function setToast($type, $msg) {
     $_SESSION['toast'] = ['type' => $type, 'message' => $msg];
 }
 
-// --- FONCTION POUR RÉCUPÉRER UN PARAMÈTRE ---
+/**
+ * Récupère une configuration globale depuis la base de données.
+ * @param PDO $pdo Instance de connexion BDD.
+ * @param string $key Clé de la configuration recherchée.
+ * @return string|false Valeur du paramètre.
+ */
 function getGlobalSetting($pdo, $key) {
     $stmt = $pdo->prepare("SELECT setting_value FROM global_settings WHERE setting_key = ?");
     $stmt->execute([$key]);
     return $stmt->fetchColumn();
 }
 
-// --- TRAITEMENT AJAX (Drag & Drop - Messages) ---
+// =================================================================
+// 1. TRAITEMENT AJAX (Opérations Asynchrones)
+// =================================================================
+
+// Gestion du réordonnancement des messages via Drag & Drop
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'reorder_messages') {
+    // Nettoyage des buffers pour garantir une réponse JSON valide
     error_reporting(0); 
     ini_set('display_errors', 0);
     if (ob_get_length()) ob_clean(); 
@@ -33,6 +67,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $order = json_decode($_POST['order'], true);
         if (is_array($order)) {
             $pdo->beginTransaction();
+            
+            // Mise à jour de la position pour chaque ID reçu
             foreach ($order as $position => $id) {
                 $safeId = intval($id);
                 if ($safeId > 0) {
@@ -49,53 +85,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['status' => 'error', 'message' => 'Erreur SQL']);
     }
-    exit; 
+    exit; // Arrêt immédiat du script après réponse JSON
 }
 
-// --- TRAITEMENT DES ACTIONS (POST) ---
+// =================================================================
+// 2. TRAITEMENT DES SOUMISSIONS DE FORMULAIRES (POST)
+// =================================================================
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
     try {
-        // --- 1. GESTION DES ROSES ---
+        // --- A. GESTION DU CATALOGUE (ROSES) ---
         if ($action === 'add_rose') {
-            // Suppression du prix et de is_active (mis à 1 par défaut)
+            // Ajout d'une nouvelle variété
             $stmt = $pdo->prepare("INSERT INTO rose_products (name) VALUES (?)");
             $stmt->execute([$_POST['name']]);
             setToast('success', 'Nouvelle variété ajoutée.');
             redirect('roses');
         }
         elseif ($action === 'update_rose') {
-            // On ne modifie plus que le nom
+            // Modification du libellé d'une variété
             $stmt = $pdo->prepare("UPDATE rose_products SET name = ? WHERE id = ?");
             $stmt->execute([$_POST['name'], $_POST['id']]);
             setToast('success', 'Variété modifiée.');
             redirect('roses');
         }
 
-        // --- 2. GESTION DES TARIFS (NOUVEAU) ---
+        // --- B. GESTION DE LA GRILLE TARIFAIRE ---
         elseif ($action === 'add_price_rule') {
             $qty = intval($_POST['quantity']);
             $price = floatval($_POST['price']);
-            // Mise à jour si la quantité existe déjà
+            
+            // Insertion ou mise à jour (ON DUPLICATE KEY) si la quantité existe déjà
             $stmt = $pdo->prepare("INSERT INTO roses_prices (quantity, price) VALUES (?, ?) ON DUPLICATE KEY UPDATE price = ?");
             $stmt->execute([$qty, $price, $price]);
             setToast('success', 'Tarif ajouté/mis à jour.');
             redirect('roses');
         }
         elseif ($action === 'update_price_rule') {
+            // Mise à jour d'une règle existante.
+            // Note : La quantité agit comme une clé primaire ici.
             $old_qty = intval($_POST['original_quantity']);
             $new_qty = intval($_POST['quantity']);
             $price = floatval($_POST['price']);
             
-            // Si on change la quantité (Clé primaire), on fait un UPDATE avec WHERE
             $stmt = $pdo->prepare("UPDATE roses_prices SET quantity = ?, price = ? WHERE quantity = ?");
             $stmt->execute([$new_qty, $price, $old_qty]);
             setToast('success', 'Tarif modifié.');
             redirect('roses');
         }
 
-        // --- 3. GESTION DES CLASSES & NIVEAUX ---
+        // --- C. GESTION ACADÉMIQUE (CLASSES & NIVEAUX) ---
         elseif ($action === 'add_class') {
             $stmt = $pdo->prepare("INSERT INTO classes (name, level_id) VALUES (?, ?)");
             $stmt->execute([trim($_POST['name']), $_POST['level_id']]);
@@ -109,6 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('classes');
         }
         elseif ($action === 'add_level') {
+            // Création automatique de l'alias de groupe (3 premières lettres)
             $stmt = $pdo->prepare("INSERT INTO class_levels (name, group_alias) VALUES (?, ?)");
             $stmt->execute([$_POST['name'], strtoupper(substr($_POST['name'], 0, 3))]);
             setToast('success', 'Niveau ajouté.');
@@ -121,7 +163,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('classes');
         }
 
-        // --- 4. GESTION DES SALLES, BÂTIMENTS, ÉTAGES ---
+        // --- D. GESTION INFRASTRUCTURE (SALLES, BÂTIMENTS) ---
         elseif ($action === 'add_room') {
             $stmt = $pdo->prepare("INSERT INTO rooms (name, building_id, floor_id) VALUES (?, ?, ?)");
             $stmt->execute([trim($_POST['name']), $_POST['building_id'], $_POST['floor_id']]);
@@ -159,32 +201,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('rooms');
         }
 
-        // --- 5. GESTION DES MESSAGES ---
+        // --- E. GESTION DES MESSAGES ---
         elseif ($action === 'add_message') {
             $stmt = $pdo->prepare("INSERT INTO predefined_messages (content) VALUES (?)");
             $stmt->execute([$_POST['content']]);
             setToast('success', 'Message ajouté.');
             redirect('messages');
         }
-        elseif ($action === 'update_message_id') {
-            $oldId = $_POST['old_id'];
-            $newId = $_POST['new_id'];
-            if ($oldId != $newId) {
-                $check = $pdo->prepare("SELECT id FROM predefined_messages WHERE id = ?");
-                $check->execute([$newId]);
-                if ($check->rowCount() > 0) {
-                    setToast('danger', 'Erreur : Cet ID est déjà pris.');
-                } else {
-                    $stmt = $pdo->prepare("UPDATE predefined_messages SET id = ? WHERE id = ?");
-                    $stmt->execute([$newId, $oldId]);
-                    setToast('success', 'ID du message modifié.');
-                }
-            }
-            redirect('messages');
-        }
-        // --- 6. GESTION DE L'OUVERTURE DES VENTES ---
+        
+        // --- F. GESTION DE L'ÉTAT DU SITE (Global Switch) ---
         elseif ($action === 'toggle_sales') {
-            // Si la checkbox est cochée, on reçoit '1', sinon on ne reçoit rien donc '0'
+            // Conversion de l'état checkbox (on/off) en binaire (1/0)
             $status = isset($_POST['sales_status']) ? '1' : '0';
             
             $stmt = $pdo->prepare("INSERT INTO global_settings (setting_key, setting_value) VALUES ('sales_open', ?) ON DUPLICATE KEY UPDATE setting_value = ?");
@@ -192,7 +219,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             $msg = ($status == '1') ? "Les ventes sont OUVERTES." : "Les ventes sont FERMÉES.";
             setToast(($status == '1' ? 'success' : 'warning'), $msg);
-            redirect('general'); // On redirige vers un nouvel onglet "Général"
+            redirect('general');
         }
 
     } catch (PDOException $e) {
@@ -200,11 +227,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// --- SUPPRESSIONS (GET) ---
+// =================================================================
+// 3. GESTION DES SUPPRESSIONS (GET)
+// =================================================================
+
 if (isset($_GET['delete']) && isset($_GET['type'])) {
     $type = $_GET['type'];
-    $id = intval($_GET['delete']); // Sert aussi pour la quantité
-    $tab = 'roses';
+    $id = intval($_GET['delete']); 
+    $tab = 'roses'; // Onglet de redirection par défaut
 
     try {
         if ($type === 'rose') {
@@ -213,6 +243,7 @@ if (isset($_GET['delete']) && isset($_GET['type'])) {
             $tab = 'roses';
         }
         elseif ($type === 'price_rule') {
+            // Suppression basée sur la quantité (Clé logique)
             $pdo->prepare("DELETE FROM roses_prices WHERE quantity = ?")->execute([$id]);
             setToast('warning', 'Tarif supprimé.');
             $tab = 'roses';
@@ -248,29 +279,34 @@ if (isset($_GET['delete']) && isset($_GET['type'])) {
             $tab = 'messages';
         }
     } catch (PDOException $e) {
+        // Interception des erreurs de contrainte de clé étrangère
         setToast('danger', 'Impossible de supprimer : Donnée liée à des commandes existantes.');
     }
     redirect($tab);
 }
 
-// --- RECUPERATION DES DONNEES ---
-// Roses triées par Nom (plus de prix)
+// =================================================================
+// 4. RÉCUPÉRATION DES DONNÉES (Affichage)
+// =================================================================
+
+// Roses et Tarifs
 $roses = $pdo->query("SELECT * FROM rose_products ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
-// Prix triés par Quantité
 $rosesPrices = $pdo->query("SELECT * FROM roses_prices ORDER BY quantity ASC")->fetchAll(PDO::FETCH_ASSOC);
 
+// Structure Académique (Classes avec jointure Niveau)
 $classes = $pdo->query("SELECT c.*, cl.name as level_name FROM classes c LEFT JOIN class_levels cl ON c.level_id = cl.id ORDER BY cl.id ASC, c.name ASC")->fetchAll(PDO::FETCH_ASSOC);
 $levels = $pdo->query("SELECT * FROM class_levels ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
 
+// Infrastructure (Salles avec jointures Bâtiment/Étage)
 $rooms = $pdo->query("SELECT r.*, b.name as bat_name, f.name as floor_name FROM rooms r LEFT JOIN buildings b ON r.building_id = b.id LEFT JOIN floors f ON r.floor_id = f.id ORDER BY b.name ASC, f.level_number ASC, r.name ASC")->fetchAll(PDO::FETCH_ASSOC);
 $buildings = $pdo->query("SELECT * FROM buildings ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 $floors = $pdo->query("SELECT * FROM floors ORDER BY level_number ASC")->fetchAll(PDO::FETCH_ASSOC);
 
+// Communication
 $messages = $pdo->query("SELECT * FROM predefined_messages ORDER BY position ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
 
+// État de l'interface
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'general';
-
-// Chargement de l'état des ventes
 $salesOpen = getGlobalSetting($pdo, 'sales_open') == '1';
 ?>
 
@@ -291,6 +327,7 @@ $salesOpen = getGlobalSetting($pdo, 'sales_open') == '1';
 <?php include 'navbar.php'; ?>
 
 <div class="container mt-4 mb-5">
+    
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <a href="admin.php" class="text-decoration-none text-muted"><i class="fas fa-arrow-left"></i> Retour Hub</a>
@@ -822,27 +859,29 @@ $salesOpen = getGlobalSetting($pdo, 'sales_open') == '1';
 document.addEventListener("DOMContentLoaded", function() {
     
     // ==========================================
-    // 1. DRAG & DROP (MESSAGES)
+    // 1. INITIALISATION DRAG & DROP (MESSAGES)
     // ==========================================
     
-    // Vérification que la librairie est bien là
+    // Vérification de chargement de la librairie SortableJS
     if (typeof Sortable === 'undefined') {
-        console.warn("Info : La librairie SortableJS n'est pas chargée (normal si pas sur l'onglet messages).");
+        console.warn("Info : La librairie SortableJS n'est pas chargée (normal si l'onglet messages n'est pas actif).");
     } else {
         var el = document.getElementById('sortable-messages');
         if (el) {
             Sortable.create(el, {
                 animation: 150,
-                handle: '.grab-handle',
+                handle: '.grab-handle', // Élément poignée
                 ghostClass: 'bg-light',
                 
                 onEnd: function (evt) {
+                    // Construction du tableau d'ordre
                     var order = [];
                     var rows = el.querySelectorAll('tr');
                     rows.forEach(function(row) {
                         order.push(row.getAttribute('data-id'));
                     });
 
+                    // Envoi AJAX pour sauvegarde
                     var formData = new FormData();
                     formData.append('action', 'reorder_messages');
                     formData.append('order', JSON.stringify(order));
@@ -857,7 +896,7 @@ document.addEventListener("DOMContentLoaded", function() {
                     })
                     .then(function(data) {
                         if (data.status === 'success') {
-                            console.log("Ordre sauvegardé.");
+                            // Feedback visuel temporaire
                             evt.item.style.backgroundColor = "#d4edda";
                             setTimeout(() => { evt.item.style.backgroundColor = ""; }, 1000);
                         } else {
@@ -865,7 +904,7 @@ document.addEventListener("DOMContentLoaded", function() {
                         }
                     })
                     .catch(function(error) {
-                        console.error('Erreur:', error);
+                        console.error('Erreur technique:', error);
                     });
                 }
             });
@@ -873,12 +912,11 @@ document.addEventListener("DOMContentLoaded", function() {
     }
 
     // ==========================================
-    // 2. GESTION DES MODALES (ROSES & PRIX)
+    // 2. LOGIQUE DES MODALES (PRODUITS & PRIX)
     // ==========================================
 
-    // Modifier une ROSE (Version Corrigée : Nom uniquement)
+    // Ouverture Modale : Modifier une ROSE
     window.editRose = function(id, name) {
-        // On cible les IDs de la nouvelle modale HTML
         var idInput = document.getElementById('edit_rose_id');
         var nameInput = document.getElementById('edit_rose_name');
         
@@ -886,12 +924,10 @@ document.addEventListener("DOMContentLoaded", function() {
             idInput.value = id;
             nameInput.value = name;
             new bootstrap.Modal(document.getElementById('editRoseModal')).show();
-        } else {
-            console.error("Erreur : Impossible de trouver les champs de la modale Rose (edit_rose_id/name).");
         }
     };
 
-    // Modifier un PRIX (Nouvelle fonction)
+    // Ouverture Modale : Modifier un TARIF
     window.editPrice = function(qty, price) {
         var qtyOrigInput = document.getElementById('edit_price_original_qty');
         var qtyInput = document.getElementById('edit_price_qty');
@@ -902,14 +938,12 @@ document.addEventListener("DOMContentLoaded", function() {
             qtyInput.value = qty;
             priceInput.value = price;
             new bootstrap.Modal(document.getElementById('editPriceModal')).show();
-        } else {
-            console.error("Erreur : Impossible de trouver les champs de la modale Prix.");
         }
     };
 
 
     // ==========================================
-    // 3. GESTION DES AUTRES MODALES (CLASSES, SALLES...)
+    // 3. LOGIQUE DES MODALES (STRUCTURE)
     // ==========================================
 
     // Classes
@@ -922,6 +956,7 @@ document.addEventListener("DOMContentLoaded", function() {
         new bootstrap.Modal(document.getElementById('addClassModal')).show();
     };
     
+    // Reset du formulaire Classe à la fermeture
     var classModal = document.getElementById('addClassModal');
     if(classModal) {
         classModal.addEventListener('hidden.bs.modal', function () {
@@ -943,6 +978,7 @@ document.addEventListener("DOMContentLoaded", function() {
         new bootstrap.Modal(document.getElementById('addRoomModal')).show();
     };
     
+    // Reset du formulaire Salle à la fermeture
     var roomModal = document.getElementById('addRoomModal');
     if(roomModal) {
         roomModal.addEventListener('hidden.bs.modal', function () {
@@ -969,10 +1005,10 @@ document.addEventListener("DOMContentLoaded", function() {
 </script>
 
 <style>
-    /* Empêche la sélection de texte sur l'icône de drag */
+    /* UX : Curseur de saisie pour le Drag & Drop */
     .grab-handle {
         cursor: grab;
-        user-select: none; /* Crucial pour éviter de sélectionner le texte */
+        user-select: none;
     }
     .grab-handle:active {
         cursor: grabbing;

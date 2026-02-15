@@ -1,61 +1,96 @@
 <?php
-// order.php
+/**
+ * Interface de Prise de Commande (Front-Office)
+ * order.php
+ * * Ce fichier est le cœur du parcours utilisateur pour l'achat de roses.
+ * Il gère :
+ * 1. L'authentification (Connecté via SSO ou Mode Invité).
+ * 2. La vérification de l'ouverture de la boutique.
+ * 3. L'affichage du catalogue produits et des options (Messages, Anonymat).
+ * 4. La constitution du panier via une interface dynamique (JS).
+ */
+
 session_start();
 require_once 'db.php';
 
 // ====================================================
-// 1. SÉCURITÉ : VÉRIFIER SI LES VENTES SONT OUVERTES
+// 1. CONTRÔLE D'ACCÈS ET DE DISPONIBILITÉ
 // ====================================================
+
+// Vérification de l'état global de la boutique
 $stmt = $pdo->prepare("SELECT setting_value FROM global_settings WHERE setting_key = 'sales_open'");
 $stmt->execute();
 $isSalesOpen = $stmt->fetchColumn() == '1';
 
+// Si les ventes sont fermées, redirection immédiate vers l'accueil
 if (!$isSalesOpen) {
     header("Location: index.php");
     exit;
 }
-// ====================================================
 
-// --- LOGIQUE D'AUTHENTIFICATION ---
+// ====================================================
+// 2. GESTION DE L'AUTHENTIFICATION
+// ====================================================
 $is_logged_in = false;
 $user_info = null;
 
 if (isset($_COOKIE['jwt'])) {
+    // Cas 1 : Utilisateur connecté via SSO (Compte Etablissement)
     try {
         require_once 'auth_check.php'; 
         $is_logged_in = true;
+        // Mise en session de l'ID pour les traitements ultérieurs
         $_SESSION['user_id'] = $current_user_id;
 
+        // Récupération des données profil pour pré-remplir le formulaire
         $stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
         $stmt->execute([$current_user_id]);
         $user_info = $stmt->fetch();
         
+        // Redirection vers la finalisation du compte si incomplet
         if (!$user_info) { header("Location: setup.php"); exit; }
-    } catch (Exception $e) { $is_logged_in = false; }
+
+    } catch (Exception $e) { 
+        // En cas d'erreur token, on rétrograde en mode déconnecté
+        $is_logged_in = false; 
+    }
 } 
 elseif (isset($_GET['guest']) && $_GET['guest'] == 1) {
+    // Cas 2 : Activation explicite du mode Invité via URL
     $_SESSION['is_guest'] = true;
 }
 elseif (isset($_SESSION['is_guest'])) {
-    // On laisse passer
+    // Cas 3 : Mode Invité déjà actif en session
+    // Pas d'action spécifique, on laisse passer
 }
 else {
+    // Cas 4 : Aucun accès autorisé -> Redirection vers la page de choix (Login/Guest)
     header("Location: welcome.php");
     exit;
 }
 
-// --- CHARGEMENT DES DONNÉES ---
+// ====================================================
+// 3. CHARGEMENT DES DONNÉES DE RÉFÉRENCE (Produits, Options)
+// ====================================================
+
+// Produits (Roses)
 $roses = $pdo->query("SELECT * FROM rose_products")->fetchAll();
+
+// Grille Tarifaire (Quantité => Prix)
 $rosesPrices = $pdo->query("SELECT * FROM roses_prices ORDER BY quantity ASC")->fetchAll(PDO::FETCH_ASSOC);
 
+// Conversion en tableau associatif simple pour injection JS
 $jsPriceTable = [];
 foreach($rosesPrices as $rp) {
     $jsPriceTable[$rp['quantity']] = $rp['price'];
 }
 
+// Messages prédéfinis, Classes, Salles
 $messages = $pdo->query("SELECT * FROM predefined_messages ORDER BY position ASC, id ASC")->fetchAll();
 $classes = $pdo->query("SELECT * FROM classes ORDER BY name ASC")->fetchAll();
 $rooms = $pdo->query("SELECT * FROM rooms ORDER BY name ASC")->fetchAll();
+
+// Plages horaires (8h à 17h) pour la localisation manuelle
 $timeSlots = range(8, 17); 
 ?>
 
@@ -65,9 +100,12 @@ $timeSlots = range(8, 17);
     <title>Nouvelle Commande - St Valentin</title>
     <?php include 'head_imports.php'; ?>
     <style>
+        /* Styles spécifiques au formulaire de commande */
         .rose-card { border-left: 4px solid #d63384; background-color: #fff0f6; }
         .total-box { font-size: 1.5rem; font-weight: bold; color: #d63384; }
         .schedule-row { font-size: 0.9rem; }
+        
+        /* Autocomplétion : Liste déroulante des résultats */
         .search-results {
             position: absolute; top: 100%; left: 0; right: 0;
             background: white; border: 1px solid #ccc;
@@ -80,18 +118,29 @@ $timeSlots = range(8, 17);
     </style>
     
     <script>
+        // Injection des données PHP vers le contexte JS global
         const ROSE_PRICES = <?php echo json_encode($jsPriceTable); ?>;
-        // Permet au JS de savoir si on est en mode invité ou non
         const IS_GUEST = <?php echo ($is_logged_in ? 'false' : 'true'); ?>;
 
+        /**
+         * Calcule le prix total en fonction de la quantité selon la grille tarifaire.
+         * Implémente une logique dégressive ou additive si hors grille.
+         */
         function getPriceForQuantity(qty) {
             qty = parseInt(qty);
             if (qty <= 0) return 0;
+            
+            // Cas 1 : Quantité exacte dans la grille
             if (ROSE_PRICES[qty]) {
                 return parseFloat(ROSE_PRICES[qty]);
             } else {
-                let maxQty = Math.max(...Object.keys(ROSE_PRICES).map(Number));
+                // Cas 2 : Quantité hors grille -> Calcul basé sur le max + supplément unitaire
+                // (Logique de fallback simple, à adapter selon règles métier)
+                let quantities = Object.keys(ROSE_PRICES).map(Number);
+                let maxQty = Math.max(...quantities);
                 let maxPrice = parseFloat(ROSE_PRICES[maxQty]);
+                
+                // Exemple : Prix max + 2€ par rose supplémentaire
                 let diff = qty - maxQty;
                 return maxPrice + (diff * 2.00); 
             }
@@ -103,6 +152,7 @@ $timeSlots = range(8, 17);
 <?php include 'navbar.php'; ?>
 
 <div class="container pb-5">
+    
     <div class="text-center mb-4">
         <h2 class="text-danger">❤️ Nouvelle Commande</h2>
         <p class="text-muted">Remplissez le formulaire pour offrir des roses.</p>
@@ -120,12 +170,14 @@ $timeSlots = range(8, 17);
                         value="<?php echo $is_logged_in ? htmlspecialchars($user_info['nom']) : ''; ?>" 
                         <?php echo $is_logged_in ? 'readonly style="background-color:#e9ecef;"' : 'required'; ?>>
                 </div>
+                
                 <div class="col-md-4 mb-2">
                     <label class="form-label">Votre Prénom</label>
                     <input type="text" id="buyer_prenom" class="form-control" 
                         value="<?php echo $is_logged_in ? htmlspecialchars($user_info['prenom']) : ''; ?>" 
                         <?php echo $is_logged_in ? 'readonly style="background-color:#e9ecef;"' : 'required'; ?>>
                 </div>
+                
                 <div class="col-md-4 mb-2">
                     <label class="form-label">Votre Classe</label>
                     <?php if ($is_logged_in): ?>
@@ -151,7 +203,9 @@ $timeSlots = range(8, 17);
     <div class="card mb-4 shadow-sm">
         <div class="card-header bg-white text-danger fw-bold d-flex justify-content-between align-items-center">
             <span>2. Vos Destinataires</span>
-            <button type="button" class="btn btn-outline-danger btn-sm" onclick="openAddModal()">+ Ajouter</button>
+            <button type="button" class="btn btn-outline-danger btn-sm" onclick="openAddModal()">
+                <i class="fas fa-plus me-1"></i> Ajouter
+            </button>
         </div>
         <div class="card-body">
             <div id="empty-cart-msg" class="text-center text-muted py-4">
@@ -199,7 +253,9 @@ $timeSlots = range(8, 17);
     </div>
 
     <div class="d-grid gap-2">
-        <button id="btn-validate-order" class="btn btn-success btn-lg" disabled>✅ Valider la commande</button>
+        <button id="btn-validate-order" class="btn btn-success btn-lg" disabled>
+            ✅ Valider la commande
+        </button>
     </div>
 </div>
 
@@ -212,6 +268,7 @@ $timeSlots = range(8, 17);
             </div>
             <div class="modal-body">
                 <form id="recipientForm">
+                    
                     <div class="p-3 mb-4 bg-danger-subtle rounded border border-danger-subtle">
                         <label class="form-label fw-bold text-danger">1. D'abord, recherchez l'élève :</label>
                         <div class="position-relative">
@@ -317,7 +374,7 @@ $timeSlots = range(8, 17);
 
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
-                <button type="button" class="btn btn-danger" id="btn-save-recipient" onclick="addRecipientToCart()">Ajouter</button>
+                <button type="button" class="btn btn-danger" id="btn-save-recipient" onclick="checkAndAddRecipient()">Ajouter</button>
             </div>
 
         </div>
@@ -359,6 +416,7 @@ $timeSlots = range(8, 17);
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
 <script>
     const classesMap = <?php 
         $map = []; foreach($classes as $c) $map[$c['id']] = $c['name'];
@@ -369,46 +427,62 @@ $timeSlots = range(8, 17);
         echo json_encode($map); 
     ?>;
 </script>
+
 <script src="assets/js/main.js?v=<?php echo time(); ?>"></script>
+
 <script>
-    // --- FONCTION APPELÉE PAR MAIN.JS EN CAS DE SUCCÈS (MODE INVITÉ) ---
+    /**
+     * Affiche la modale de succès pour les utilisateurs invités.
+     * Cette fonction est appelée par main.js après validation de la commande.
+     */
     function showGuestSuccessModal() {
-        // On récupère les valeurs affichées à l'écran juste avant de valider
+        // Récupération des totaux affichés
         const total = document.getElementById('grand-total').innerText;
         const count = document.getElementById('count-people').innerText;
         
-        // On met à jour le modal
+        // Mise à jour du contenu de la modale
         document.getElementById('success-total').innerText = total;
         document.getElementById('success-count').innerText = count;
 
-        // On affiche le modal
+        // Affichage
         const myModal = new bootstrap.Modal(document.getElementById('guestSuccessModal'));
         myModal.show();
     }
 
+    /**
+     * Vérifie si le destinataire saisi manuellement existe déjà en base de données.
+     * Si oui, propose de lier la commande au profil existant.
+     */
     async function checkAndAddRecipient() {
-        // ... (Code de vérification existant conservé) ...
         let nom = document.getElementById('dest_nom').value.trim();
         let prenom = document.getElementById('dest_prenom').value.trim();
         let idField = document.getElementById('dest_schedule_id');
-        let searchUsed = (idField.value !== "");
-
-        if (!searchUsed && nom !== "" && prenom !== "") {
+        
+        // Si aucun ID n'est lié (saisie manuelle) et que les champs sont remplis
+        if (idField.value === "" && nom !== "" && prenom !== "") {
             let btn = document.getElementById('btn-save-recipient');
             let originalText = btn.innerText;
             btn.disabled = true;
             btn.innerText = "Vérification...";
+            
             try {
                 const response = await fetch(`api/check_recipient_exists.php?nom=${encodeURIComponent(nom)}&prenom=${encodeURIComponent(prenom)}`);
                 const result = await response.json();
+                
+                // Si une correspondance exacte est trouvée
                 if (result.found) {
                     alert(`⚠️ Information :\n\nUne personne nommée "${result.data.nom} ${result.data.prenom}" (Classe : ${result.data.class_name}) existe déjà dans la base.\n\nNous allons lier votre commande à ce profil existant.`);
                     idField.value = result.data.id;
                 }
-            } catch (error) { console.error("Erreur vérif", error); }
+            } catch (error) { 
+                console.error("Erreur vérification destinataire", error); 
+            }
+            
             btn.disabled = false;
             btn.innerText = originalText;
         }
+        
+        // Appelle la fonction principale d'ajout au panier (définie dans main.js)
         addRecipientToCart();
     }
 </script>

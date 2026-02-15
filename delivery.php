@@ -1,34 +1,44 @@
 <?php
-// delivery.php
+/**
+ * Interface de Distribution & Logistique
+ * delivery.php
+ * * Ce module est l'outil principal utilisé par les équipes sur le terrain (CVL) le jour J.
+ * * Fonctionnalités clés :
+ * 1. Filtrage contextuel : Par bâtiment et par heure de cours.
+ * 2. Moteur de recherche : Pour trouver rapidement un élève (Mode "Guichet").
+ * 3. Workflow de livraison : Validation avec délai de rétractation (UX).
+ * 4. Notifications : Envoi automatique d'emails aux acheteurs lors de la validation.
+ */
+
 require_once 'db.php';
 require_once 'auth_check.php'; 
 require_once 'mail_config.php';
 require_once 'logger.php';
 
+// Vérification des droits (Accès membre CVL requis)
 checkAccess('cvl');
 
 // ==============================================================================
-// 1. TRAITEMENT AJAX (Validation par lot pour un destinataire)
+// 1. API AJAX (Traitement des actions de distribution)
 // ==============================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     header('Content-Type: application/json');
     $response = ['success' => false, 'message' => 'Erreur inconnue'];
     
-    // On reçoit maintenant l'ID du destinataire (l'élève), pas juste une commande unique
+    // Récupération des identifiants cibles
     $recipientId = isset($_POST['recipient_id']) ? intval($_POST['recipient_id']) : 0;
-    $giftId      = isset($_POST['gift_id']) ? intval($_POST['gift_id']) : 0; // Fallback pour compatibilité historique
+    $giftId      = isset($_POST['gift_id']) ? intval($_POST['gift_id']) : 0; // Rétro-compatibilité
 
-    // Si on a un recipient_id, on priorise le traitement par lot
     $targetId = ($recipientId > 0) ? $recipientId : 0;
 
     if ($targetId > 0) {
         $adminId = $_SESSION['user_id'] ?? ($_SESSION['id'] ?? null);
 
         try {
+            // --- ACTION : CONFIRMATION DE LIVRAISON ---
             if (isset($_POST['action']) && $_POST['action'] === 'mark_distributed') {
                 
-                // A. Récupérer toutes les commandes NON distribuées pour cet élève
-                // Si on a reçu un recipient_id, on prend tout. Si c'est un gift_id (cas rare), on prend juste lui.
+                // A. Identification des commandes en attente pour cet élève
                 $sqlGifts = "SELECT id FROM order_recipients WHERE is_distributed = 0 ";
                 $params = [];
                 
@@ -46,20 +56,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
                 $countUpdated = 0;
 
-                // B. Boucle sur chaque cadeau pour update + mail individuel
+                // B. Traitement itératif des commandes (Mise à jour + Notification)
                 foreach ($giftsToUpdate as $ortId) {
                     $now = date('Y-m-d H:i:s');
                     
-                    // 1. Update BDD
+                    // 1. Mise à jour du statut en base de données
                     $stmtUpdate = $pdo->prepare("UPDATE order_recipients SET is_distributed = 1, distributed_at = ?, distributed_by_cvl_id = ? WHERE id = ?");
                     $stmtUpdate->execute([$now, $adminId, $ortId]);
                     $countUpdated++;
 
-                    // Log
+                    // 2. Journalisation de l'action
                     logAction($adminId, 'order_recipient', $ortId, 'DISTRIBUTION_CONFIRMED', ['is_distributed' => 0], ['is_distributed' => 1], "Livraison groupée confirmée");
 
-                    // 2. Envoi Mail (Copier-coller de la logique précédente, mais dans la boucle)
+                    // 3. Envoi de l'email de confirmation à l'acheteur
                     try {
+                        // Récupération des informations de contact
                         $stmtInfo = $pdo->prepare("
                             SELECT 
                                 u.email, u.prenom as buyer_prenom, 
@@ -76,13 +87,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
                         if ($info && !empty($info['email'])) {
                             $mail = getMailer();
-                            // Reset des destinataires pour éviter d'envoyer à l'acheteur précédent dans la boucle
-                            $mail->clearAddresses(); 
+                            $mail->clearAddresses(); // Nettoyage impératif dans une boucle
                             $mail->addAddress($info['email']);
                             
                             $buyerName = htmlspecialchars($info['buyer_prenom']);
                             $destName  = htmlspecialchars($info['dest_prenom'] . ' ' . $info['dest_nom']);
                             
+                            // Construction du template HTML du mail
                             $body = "
                             <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px;'>
                                 <div style='background-color: #d63384; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
@@ -94,9 +105,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                                     <div style='background-color: #f8f9fa; padding: 15px; border-left: 4px solid #d63384; margin: 20px 0; font-style: italic;'>
                                         Le destinataire a bien reçu sa surprise en main propre.
                                     </div>
-
                                     <p>Merci d'avoir participé à l'opération Saint-Valentin du CVL !</p>
-
                                     <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>
                                     <p style='font-size: 0.8em; color: #888; text-align: center;'>
                                         Ceci est un mail automatique. Merci de ne pas répondre.<br>
@@ -112,6 +121,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                             $mail->send();
                         }
                     } catch (Exception $e) {
+                        // L'erreur d'envoi de mail ne doit pas bloquer la transaction BDD
                         error_log("Erreur mail distribution (ID: $ortId) : " . $e->getMessage());
                     }
                 }
@@ -122,8 +132,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                     'message' => "$countUpdated cadeaux confirmés !"
                 ];
             }
+            // --- ACTION : ANNULATION DE DISTRIBUTION (UNDO) ---
             elseif (isset($_POST['unmark_distributed'])) {
-                // Annulation groupée
                 $sqlUnmark = "UPDATE order_recipients SET is_distributed = 0, distributed_at = NULL, distributed_by_cvl_id = NULL WHERE is_distributed = 1 ";
                 $paramsUnmark = [];
 
@@ -138,7 +148,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                 $stmt = $pdo->prepare($sqlUnmark);
                 $stmt->execute($paramsUnmark);
                 
-                // On log juste une fois générique pour l'annulation de groupe
                 logAction($adminId, 'recipient_group', $targetId, 'DISTRIBUTION_CANCELLED', [], [], "Annulation livraison groupée");
 
                 $response = [
@@ -159,21 +168,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 }
 
 // ==============================================================================
-// 2. TRAITEMENT POST STANDARD (Fallback)
+// 2. GESTION DES REQUÊTES SYNCHRONES (Fallback)
 // ==============================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
-    // Redirection simple si JS désactivé (ne gère pas le groupage complexe ici pour simplifier, renvoie vers l'accueil)
     header("Location: delivery.php");
     exit;
 }
 
 // ==============================================================================
-// 3. PRÉPARATION DES DONNÉES
+// 3. PRÉPARATION DES DONNÉES D'AFFICHAGE
 // ==============================================================================
 
-// --- Filtres ---
+// --- Initialisation des filtres ---
 $buildings = $pdo->query("SELECT id, name FROM buildings ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 
+// Détermination de l'heure courante (bornée entre 8h et 17h)
 $currentHour = intval(date('H'));
 if ($currentHour < 8 || $currentHour > 17) $currentHour = 8;
 $selectedHour = isset($_GET['hour']) ? intval($_GET['hour']) : $currentHour;
@@ -183,14 +192,14 @@ $hourColumn = 'h' . str_pad($selectedHour, 2, '0', STR_PAD_LEFT);
 $defaultBuildingId = count($buildings) > 0 ? $buildings[0]['id'] : 0;
 $selectedBuilding = isset($_GET['building']) ? $_GET['building'] : $defaultBuildingId;
 $searchQuery = isset($_GET['q']) ? trim($_GET['q']) : '';
-$view = isset($_GET['view']) ? $_GET['view'] : 'todo';
+$view = isset($_GET['view']) ? $_GET['view'] : 'todo'; // 'todo' (À livrer) ou 'done' (Historique)
 
-// --- Requête SQL ---
+// --- Construction de la requête SQL principale ---
 $params = [];
 $sql = "";
 
 if ($searchQuery) {
-    // Mode Recherche
+    // Cas 1 : Mode Recherche (Ignore l'heure et le bâtiment)
     $sql = "
         SELECT 
             ort.id as unique_gift_id, ort.is_anonymous, ort.message_id, ort.distributed_at, ort.recipient_id,
@@ -221,7 +230,7 @@ if ($searchQuery) {
     $params['q'] = "%$searchQuery%";
 
 } else {
-    // Mode Par Salle/Heure
+    // Cas 2 : Mode Logistique (Filtrage par Salle/Heure via table schedules)
     $sql = "
         SELECT 
             ort.id as unique_gift_id, ort.is_anonymous, ort.message_id, ort.distributed_at, ort.recipient_id,
@@ -262,14 +271,12 @@ $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $rawRecipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// --- Chargement des Roses ---
-// On récupère les détails des roses pour tous les IDs de cadeaux trouvés
+// --- Récupération des détails des produits (Roses) ---
 $giftIds = array_column($rawRecipients, 'unique_gift_id');
 $rosesMap = [];
 
 if (!empty($giftIds)) {
     $inQuery = implode(',', array_fill(0, count($giftIds), '?'));
-    // Note: rr.recipient_id ici correspond à order_recipients.id (clé étrangère un peu mal nommée dans la structure, mais c'est le lien)
     $stmtRoses = $pdo->prepare("SELECT rr.recipient_id as gift_ref_id, rr.quantity, rp.name FROM recipient_roses rr JOIN rose_products rp ON rr.rose_product_id = rp.id WHERE rr.recipient_id IN ($inQuery)");
     $stmtRoses->execute($giftIds);
     while ($row = $stmtRoses->fetch(PDO::FETCH_ASSOC)) {
@@ -277,14 +284,14 @@ if (!empty($giftIds)) {
     }
 }
 
-// --- REGROUPEMENT PAR ÉLÈVE (NOUVEAU) ---
-// On transforme la liste plate (1 ligne = 1 commande) en liste hiérarchique (1 ligne = 1 élève avec N commandes)
+// --- Restructuration des données : Regroupement par Élève ---
+// Transformation d'une liste de commandes à plat vers une structure hiérarchique
 $groupedRecipients = [];
 
 foreach ($rawRecipients as $row) {
     $rId = $row['recipient_id'];
     
-    // Si cet élève n'est pas encore dans la liste, on l'initialise
+    // Initialisation de l'entrée élève
     if (!isset($groupedRecipients[$rId])) {
         $groupedRecipients[$rId] = [
             'info' => [
@@ -295,13 +302,13 @@ foreach ($rawRecipients as $row) {
                 'room_name' => $row['room_name'],
                 'floor_name' => $row['floor_name'],
                 'building_name' => $row['building_name'],
-                'distributed_at' => $row['distributed_at'] // Pour l'historique
+                'distributed_at' => $row['distributed_at']
             ],
             'orders' => []
         ];
     }
     
-    // On ajoute la commande spécifique à cet élève
+    // Ajout de la commande à la liste de l'élève
     $groupedRecipients[$rId]['orders'][] = [
         'gift_id' => $row['unique_gift_id'],
         'buyer_prenom' => $row['buyer_prenom'],
@@ -312,8 +319,7 @@ foreach ($rawRecipients as $row) {
     ];
 }
 
-// --- REGROUPEMENT PAR SALLE POUR L'AFFICHAGE ---
-// Maintenant qu'on a regroupé par élève, on regroupe par Salle/Étage pour l'affichage visuel
+// --- Organisation pour l'affichage (Grouping par Salle) ---
 $displayData = [];
 if ($searchQuery) {
     $displayData['Résultats']['🔍 Recherche'] = $groupedRecipients;
@@ -333,6 +339,7 @@ if ($searchQuery) {
     <?php include 'head_imports.php'; ?>
     <style>
         body { background-color: #f4f6f9; padding-bottom: 80px; }
+        /* Scroll horizontal pour les filtres sur mobile */
         .scrolling-wrapper { overflow-x: auto; white-space: nowrap; padding: 5px 0; -webkit-overflow-scrolling: touch; }
         .scrolling-wrapper::-webkit-scrollbar { display: none; }
         
@@ -528,7 +535,8 @@ if ($searchQuery) {
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     
-    // --- VARIABLES GLOBALES ---
+    // --- Logique Client (Frontend) ---
+    // Gestionnaire du système de Toast avec délai d'annulation (Pattern "Undo")
     let timer = null;
     let seconds = 5;
     let pendingFormData = null;
@@ -540,8 +548,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const countdownSpan = document.getElementById('toastCountdown');
     const cancelBtn = document.getElementById('toastCancelBtn');
 
+    /**
+     * Exécute la requête AJAX de livraison après le délai de sécurité.
+     * Gère également l'animation de suppression de la ligne dans l'interface.
+     */
     function runDeliveryAjax(formData, btnElement) {
-        // Ici on récupère le recipient_id pour masquer la ligne de l'élève
         const recipientId = formData.get('recipient_id');
 
         fetch('delivery', {
@@ -551,7 +562,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                // On cible la ligne de l'élève (tout le bloc)
+                // Animation de suppression (Slide out)
                 const row = document.getElementById('recipient-row-' + recipientId);
                 
                 if (row) {
@@ -562,6 +573,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     row.style.margin = '0';
                     row.style.padding = '0';
 
+                    // Mise à jour du compteur de salle
                     const roomBlock = row.closest('.room-block');
                     if (roomBlock) {
                         const badge = roomBlock.querySelector('.js-room-count');
@@ -569,6 +581,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         if (badge) badge.textContent = remaining - 1;
 
+                        // Suppression du bloc salle si vide
                         if (remaining - 1 <= 0) {
                             setTimeout(() => {
                                 roomBlock.style.transition = 'opacity 0.5s';
@@ -597,6 +610,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // Interception de la soumission du formulaire
     document.body.addEventListener('submit', function(e) {
         if (e.target.classList.contains('ajax-delivery-form')) {
             e.preventDefault();
@@ -608,6 +622,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const btn = e.target.querySelector('.btn-action');
 
             if (action === 'mark_distributed') {
+                // Initialisation du mécanisme de délai (Countdown)
                 pendingFormData = formData;
                 pendingButton = btn;
 
@@ -639,7 +654,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }, 1000);
 
             } else {
-                // Pour l'historique (Undo), on reload pour rafraîchir la liste
+                // Traitement immédiat pour l'annulation (Retour historique)
                 fetch('delivery', {
                     method: 'POST',
                     body: formData
@@ -652,6 +667,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // Gestion du bouton "Annuler" dans le toast
     cancelBtn.addEventListener('click', function() {
         clearInterval(timer);
         toast.hide();

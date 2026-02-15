@@ -1,23 +1,33 @@
 <?php
-// admin_team.php
+/**
+ * Administration - Gestion de l'Équipe
+ * admin_team.php
+ * * Ce module permet de gérer les droits d'accès au back-office.
+ * Il offre les fonctionnalités pour ajouter des utilisateurs existants à l'équipe (CVL ou Admin)
+ * et pour révoquer ces accès.
+ */
+
 require_once 'db.php';
 require_once 'auth_check.php';
 
-// SÉCURITÉ : Seul l'admin passe
+// Vérification des droits d'accès (Administrateur uniquement)
 checkAccess('admin');
 
-// --- TRAITEMENT ---
+// =================================================================
+// TRAITEMENT DES ACTIONS (POST & GET)
+// =================================================================
 
-// 1. Ajouter un membre
+// --- 1. AJOUT D'UN NOUVEAU MEMBRE ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user_id'])) {
     $userIdToAdd = intval($_POST['add_user_id']);
     $roleToAdd = $_POST['role']; 
     
     if ($userIdToAdd > 0) {
+        // Insertion ou mise à jour du rôle (ON DUPLICATE KEY UPDATE)
         $stmt = $pdo->prepare("INSERT INTO cvl_members (user_id, role) VALUES (?, ?) ON DUPLICATE KEY UPDATE role = ?");
         $stmt->execute([$userIdToAdd, $roleToAdd, $roleToAdd]);
 
-        // Notification de succès
+        // Feedback utilisateur : Notification de succès
         $_SESSION['toast'] = [
             'type' => 'success',
             'message' => 'Nouveau membre ajouté à l\'équipe avec succès !'
@@ -27,21 +37,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user_id'])) {
     exit;
 }
 
-// 2. Supprimer
+// --- 2. SUPPRESSION D'UN MEMBRE ---
 if (isset($_GET['delete_id'])) {
     $idToDelete = intval($_GET['delete_id']);
-    // On s'empêche de se supprimer soi-même ET on protège le Super Admin (ID 2)
+    
+    // Sécurité critique :
+    // 1. Empêche l'administrateur de supprimer son propre compte (auto-kick).
+    // 2. Protège le compte Super Admin (ID 2) contre toute suppression accidentelle.
     if ($idToDelete != $_SESSION['user_id'] && $idToDelete != 2) {
         $stmt = $pdo->prepare("DELETE FROM cvl_members WHERE user_id = ?");
         $stmt->execute([$idToDelete]);
 
-        // Notification de suppression (type warning pour attirer l'attention)
+        // Feedback utilisateur : Confirmation de la révocation des droits
         $_SESSION['toast'] = [
             'type' => 'warning',
             'message' => 'Les droits d\'accès ont été retirés à cet utilisateur.'
         ];
     } else {
-        // Tentative de suppression interdite
+        // Gestion d'erreur : Tentative d'action sur un compte protégé
         $_SESSION['toast'] = [
             'type' => 'danger',
             'message' => 'Action impossible sur cet utilisateur.'
@@ -51,9 +64,13 @@ if (isset($_GET['delete_id'])) {
     exit;
 }
 
-// --- AFFICHAGE ---
+// =================================================================
+// RÉCUPÉRATION DES DONNÉES POUR L'AFFICHAGE
+// =================================================================
 
-// A. Liste des membres actuels
+// 1. Liste des membres actuels de l'équipe
+// Récupère les rôles et les identités via une jointure gauche sur la table users.
+// Tri par rôle (Admin d'abord) puis par nom.
 $stmt = $pdo->query("
     SELECT cm.user_id, cm.role, u.nom, u.prenom 
     FROM cvl_members cm 
@@ -62,7 +79,8 @@ $stmt = $pdo->query("
 ");
 $teamMembers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// B. Liste pour le menu déroulant (ceux qui ne sont PAS encore membres)
+// 2. Liste des candidats éligibles (Pour le menu déroulant)
+// Sélectionne les utilisateurs inscrits qui ne possèdent pas encore de rôle (cm.user_id IS NULL).
 $stmt = $pdo->query("
     SELECT u.user_id, u.nom, u.prenom 
     FROM users u 
@@ -144,7 +162,7 @@ $potentialMembers = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                 </td>
                                 
                                 <td>
-                                    <?php if($member['user_id'] == 2): // Super Admin (Théo) ?>
+                                    <?php if($member['user_id'] == 2): // Compte Super Administrateur ?>
                                         <span class="badge bg-warning text-dark role-badge"><i class="fas fa-crown"></i> BOSS</span>
                                     <?php elseif($member['role'] === 'admin'): ?>
                                         <span class="badge bg-danger role-badge">ADMIN</span>

@@ -1,8 +1,21 @@
 <?php
-// import_edt.php
+/**
+ * Interface d'Administration - Importation de Données
+ * import_edt.php
+ * * Ce module permet d'alimenter la base de données élèves et emplois du temps.
+ * Il se divise en deux étapes séquentielles :
+ * 1. Importation de la liste des élèves via CSV (Création des comptes destinataires).
+ * 2. Upload et traitement des fichiers ICS pour générer les emplois du temps (Localisation).
+ *
+ * Utilise `backend_import.php` comme contrôleur API pour les traitements lourds.
+ */
+
 session_start();
 require_once 'db.php';
 require_once 'auth_check.php';
+
+// Vérification des droits d'accès
+// Note : Accessible à tout administrateur, mais protégé par auth_check.php
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -10,10 +23,17 @@ require_once 'auth_check.php';
     <title>Importation Données - St Valentin 2026</title>
     <?php include 'head_imports.php'; ?>
     <style>
+        /* Styles spécifiques au wizard d'importation */
         .step-card { border-left: 5px solid #6c757d; transition: all 0.3s; }
         .step-active { border-left-color: #0d6efd; box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important; }
+        
+        /* Conteneur pour la liste des fichiers ICS en attente */
         .file-list-container { max-height: 300px; overflow-y: auto; background-color: #f8f9fa; }
+        
+        /* Positionnement des notifications Toast */
         .toast-container-custom { position: fixed; bottom: 20px; right: 20px; z-index: 1055; }
+        
+        /* Zone d'affichage des erreurs d'import */
         .error-log-container { background: #fff3cd; border: 1px solid #ffeeba; border-radius: 5px; padding: 15px; margin-top: 20px; display: none; }
     </style>
 </head>
@@ -38,7 +58,7 @@ require_once 'auth_check.php';
         <div class="card-body">
             <div class="row align-items-end">
                 <div class="col-md-8">
-                    <label class="form-label">Fichier CSV (3 colonnes : Nom ; Prénom ; Classe)</label>
+                    <label class="form-label">Fichier CSV (Format attendu : Nom ; Prénom ; Classe)</label>
                     <input type="file" class="form-control" id="csvInput" accept=".csv">
                 </div>
                 <div class="col-md-4">
@@ -154,7 +174,11 @@ require_once 'auth_check.php';
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    // --- TOASTS ---
+    /**
+     * Affiche une notification Toast temporaire.
+     * @param {string} message Le texte à afficher.
+     * @param {string} type Le type de message ('success', 'error', 'info').
+     */
     function showToast(message, type = 'info') {
         const container = document.getElementById('ajaxToastContainer');
         const id = 'toast-' + Date.now();
@@ -168,7 +192,9 @@ require_once 'auth_check.php';
         new bootstrap.Toast(document.getElementById(id), { delay: 5000 }).show();
     }
 
-    // --- ETAPE 1 : IMPORT CSV ---
+    /**
+     * Gère l'importation du fichier CSV des élèves.
+     */
     async function importCSV() {
         const input = document.getElementById('csvInput');
         const btn = document.getElementById('btnCsv');
@@ -187,6 +213,7 @@ require_once 'auth_check.php';
             const res = await req.json();
             if (res.status === 'success') {
                 showToast(res.message, "success");
+                // Transition visuelle vers l'étape suivante
                 document.getElementById('cardCsv').classList.remove('step-active');
                 document.getElementById('cardIcs').classList.add('step-active');
             } else {
@@ -200,7 +227,9 @@ require_once 'auth_check.php';
         btn.innerHTML = '<i class="fas fa-file-csv me-2"></i>Importer les élèves';
     }
 
-    // --- ETAPE 2 : UPLOAD BATCH ---
+    /**
+     * Upload par lot des fichiers ICS vers le dossier temporaire.
+     */
     async function uploadFilesBatch() {
         const input = document.getElementById('icsInput');
         const files = input.files;
@@ -213,6 +242,7 @@ require_once 'auth_check.php';
         btn.disabled = true;
         pWrapper.classList.remove('d-none');
         
+        // Configuration du batch (taille des paquets)
         const BATCH_SIZE = 10;
         let uploaded = 0;
         let success = 0;
@@ -236,10 +266,12 @@ require_once 'auth_check.php';
         input.value = '';
         setTimeout(() => pWrapper.classList.add('d-none'), 1000);
         btn.disabled = false;
-        fetchFileList();
+        fetchFileList(); // Rafraîchissement de la liste d'attente
     }
 
-    // --- CLEANUP ---
+    /**
+     * Vide manuellement le dossier temporaire du serveur.
+     */
     async function manualCleanup() {
         if(!confirm("Supprimer TOUS les fichiers du dossier temporaire ?")) return;
         const fd = new FormData(); fd.append('action', 'cleanup');
@@ -249,7 +281,9 @@ require_once 'auth_check.php';
         fetchFileList();
     }
 
-    // --- LISTING ---
+    /**
+     * Récupère la liste des fichiers en attente sur le serveur.
+     */
     let currentFiles = [];
     async function fetchFileList() {
         const fd = new FormData(); fd.append('action', 'list');
@@ -258,6 +292,7 @@ require_once 'auth_check.php';
         currentFiles = data.files || [];
         renderList();
         
+        // Reset de l'affichage d'erreurs
         document.getElementById('errorReport').style.display = 'none';
         document.getElementById('errorLogList').innerHTML = '';
     }
@@ -286,7 +321,9 @@ require_once 'auth_check.php';
         });
     }
 
-    // --- TRAITEMENT & RAPPORT ---
+    /**
+     * Lance le traitement séquentiel des fichiers ICS.
+     */
     async function startIntegration() {
         const btn = document.getElementById('btnProcess');
         const pWrapper = document.getElementById('processProgressWrapper');
@@ -299,10 +336,11 @@ require_once 'auth_check.php';
         errorReport.style.display = 'none';
         errorList.innerHTML = '';
         
-        // COMPTEURS RAPPORT
+        // Initialisation des compteurs de rapport
         let stats = { inserted: 0, updated: 0, unchanged: 0, skipped: 0, errors: 0 };
         let count = 0;
 
+        // Boucle de traitement fichier par fichier
         for (let i = 0; i < currentFiles.length; i++) {
             const f = currentFiles[i];
             const badge = document.getElementById(`badge-${i}`);
@@ -329,7 +367,7 @@ require_once 'auth_check.php';
                     badge.className = 'badge bg-secondary'; badge.innerText = 'Ignoré';
                     stats.skipped++;
                 } else {
-                    // ERROR
+                    // Gestion d'erreur fonctionnelle
                     badge.className = 'badge bg-danger'; badge.innerText = 'Erreur';
                     stats.errors++;
                     errorList.insertAdjacentHTML('beforeend', `
@@ -339,12 +377,14 @@ require_once 'auth_check.php';
                     `);
                 }
             } catch(e) {
+                // Gestion d'erreur technique (Crash serveur, Timeout...)
                 badge.className = 'badge bg-danger'; badge.innerText = 'Crash';
                 stats.errors++;
             }
 
             count++;
             pBar.style.width = Math.round((count/currentFiles.length)*100) + '%';
+            // Scroll automatique pour suivre le traitement
             document.getElementById(`row-${i}`).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
         
@@ -352,7 +392,7 @@ require_once 'auth_check.php';
         
         if (stats.errors > 0) errorReport.style.display = 'block';
 
-        // AFFICHAGE MODAL
+        // Mise à jour de la modale de rapport final
         document.getElementById('countInserted').innerText = stats.inserted;
         document.getElementById('countUpdated').innerText = stats.updated;
         document.getElementById('countUnchanged').innerText = stats.unchanged;
@@ -361,12 +401,9 @@ require_once 'auth_check.php';
 
         const reportModal = new bootstrap.Modal(document.getElementById('modalReport'));
         reportModal.show();
-
-        // Rafraichir liste si nécessaire (pour enlever ceux qui sont faits)
-        // On ne le fait pas tout de suite pour laisser l'utilisateur voir les badges
     }
     
-    // Init
+    // Initialisation au chargement de la page
     fetchFileList();
 </script>
 </body>

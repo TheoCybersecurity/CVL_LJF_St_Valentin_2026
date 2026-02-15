@@ -1,13 +1,20 @@
 <?php
-// about.php
+/**
+ * Page "À Propos"
+ * about.php
+ * * Cette page présente le contexte du projet, le profil du développeur,
+ * la stack technique utilisée, ainsi que la liste des membres du CVL (Conseil de la Vie Lycéenne).
+ * Elle sert de vitrine technique et de page de crédits.
+ */
+
 session_start();
 require_once 'db.php';
 
-// RECUPERATION DES MEMBRES DU CVL
+// --- RÉCUPÉRATION DE L'ÉQUIPE ORGANISATRICE (CVL) ---
 $cvlTeam = [];
 try {
-    // On sélectionne le prénom et le nom
-    // On exclut spécifiquement l'ID 2 (le développeur) de cette liste
+    // Récupération des membres actifs pour l'affichage public.
+    // Exclusion du compte administrateur/développeur (ID 2) pour ne lister que les élèves organisateurs.
     $sqlTeam = "SELECT u.prenom, u.nom 
                 FROM cvl_members cm 
                 JOIN users u ON cm.user_id = u.user_id 
@@ -16,7 +23,9 @@ try {
     $stmtTeam = $pdo->query($sqlTeam);
     $cvlTeam = $stmtTeam->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
+    // En cas d'erreur SQL, on initialise un tableau vide pour éviter de casser l'affichage HTML
     $cvlTeam = [];
+    error_log("Erreur lors de la récupération de l'équipe CVL : " . $e->getMessage());
 }
 ?>
 
@@ -24,7 +33,9 @@ try {
 <html lang="fr">
 <head>
     <title>À propos du projet - St Valentin</title>
+    
     <?php include 'head_imports.php'; ?>
+    
     <style>
         .profile-section {
             background: linear-gradient(to right, #ffffff, #f8f9fa);
@@ -35,7 +46,7 @@ try {
             border: none;
         }
         .cvl-section {
-            border-top: 5px solid #dc3545; /* Rouge St Valentin */
+            border-top: 5px solid #dc3545; /* Rouge thématique St Valentin */
         }
         .tech-badge {
             font-size: 0.9rem;

@@ -1,38 +1,59 @@
 <?php
-// navbar.php
+/**
+ * Barre de Navigation Principale (Navbar)
+ * navbar.php
+ * * Ce composant est inclus sur toutes les pages du site.
+ * Il assure :
+ * 1. L'identification visuelle de l'utilisateur connecté.
+ * 2. La gestion dynamique des liens selon le rôle (Acheteur, Membre CVL, Admin).
+ * 3. La navigation responsive (Mobile/Desktop).
+ */
 
-// 1. DÉTECTION INTELLIGENTE DE L'UTILISATEUR
+// =================================================================
+// 1. LOGIQUE D'IDENTIFICATION UTILISATEUR
+// =================================================================
+// Tente de récupérer l'identité de l'utilisateur via les variables globales ou la session
 $nav_user_id = null;
 $nav_prenom = 'Toi';
 
 if (isset($current_user_id)) {
+    // Cas 1 : Variables globales injectées par auth_check.php
     $nav_user_id = $current_user_id;
     $nav_prenom = $current_user_prenom ?? 'Toi';
 } elseif (isset($_SESSION['user_id'])) {
+    // Cas 2 : Récupération depuis la session PHP standard
     $nav_user_id = $_SESSION['user_id'];
     $nav_prenom = $_SESSION['prenom'] ?? 'Toi';
 }
 
-// 2. DÉTECTION DU RÔLE
+// =================================================================
+// 2. DÉTECTION DU RÔLE (RBAC)
+// =================================================================
+// Vérifie si l'utilisateur possède des privilèges élevés (CVL ou Admin)
 $nav_role = null;
 
 if ($nav_user_id) {
+    // Sélectionne l'instance PDO disponible (Locale ou Globale selon le contexte)
     $db = isset($pdo) ? $pdo : (isset($pdo_local) ? $pdo_local : null);
+    
     if ($db) {
         try {
             $stmtNav = $db->prepare("SELECT role FROM cvl_members WHERE user_id = ?");
             $stmtNav->execute([$nav_user_id]);
             $res = $stmtNav->fetch(PDO::FETCH_ASSOC);
             if ($res) {
-                $nav_role = $res['role'];
+                $nav_role = $res['role']; // 'cvl' ou 'admin'
             }
-        } catch (Exception $e) {}
+        } catch (Exception $e) {
+            // Silence en cas d'erreur SQL mineure pour ne pas casser l'affichage du menu
+        }
     }
 }
 ?>
 
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm mb-4">
   <div class="container">
+    
     <a class="navbar-brand fw-bold text-danger brand-bounce" 
         href="#" 
         id="brandLink" 
@@ -41,6 +62,7 @@ if ($nav_user_id) {
         data-bs-target="#exitConfirmationModal">
             🌹 St Valentin 2026
     </a>
+
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
       <span class="navbar-toggler-icon"></span>
     </button>
@@ -140,25 +162,26 @@ if ($nav_user_id) {
 </div>
 
 <script>
+    // Initialisation des Tooltips Bootstrap au chargement du DOM
     document.addEventListener("DOMContentLoaded", function(){
         var brandElement = document.getElementById('brandLink');
-        // On initialise le Tooltip manuellement
         var tooltip = new bootstrap.Tooltip(brandElement, {
-            placement: 'bottom', // Le texte s'affiche en dessous
-            trigger: 'hover'     // Apparait au survol
+            placement: 'bottom',
+            trigger: 'hover'
         });
     });
 </script>
 
 <style>
-/* --- ANIMATIONS DE BASE --- */
+/* --- ANIMATIONS & INTERACTIVITÉ --- */
+
 @keyframes clickBounce {
     0% { transform: scale(1); }
     50% { transform: scale(0.92); }
     100% { transform: scale(1); }
 }
 
-/* Effet au clic (Bounce) sur les liens et boutons */
+/* Effet tactile au clic */
 .nav-link:active, 
 .dropdown-item:active, 
 .navbar-brand:active, 
@@ -166,7 +189,7 @@ if ($nav_user_id) {
     animation: clickBounce 0.3s ease;
 }
 
-/* --- EFFETS AU SURVOL --- */
+/* Transitions douces au survol */
 .nav-link {
     transition: all 0.3s ease;
 }
@@ -187,17 +210,17 @@ if ($nav_user_id) {
 }
 
 .dropdown-item:hover {
-    padding-left: 25px; /* Petit décalage vers la droite au survol */
+    padding-left: 25px; /* UX : Indice visuel de sélection */
     background-color: #f8f9fa;
 }
 
-/* Couleurs spécifiques au survol des items du menu */
-.dropdown-item:hover i.text-primary { color: #0d6efd !important; } /* Bleu plus vif */
+/* Colorisation contextuelle des icônes au survol */
+.dropdown-item:hover i.text-primary { color: #0d6efd !important; }
 .dropdown-item:hover i.text-danger { color: #dc3545 !important; }
 .dropdown-item:hover i.text-success { color: #198754 !important; }
-.dropdown-item:hover i.text-secondary { color: #212529 !important; } /* Gris devient noir */
+.dropdown-item:hover i.text-secondary { color: #212529 !important; }
 
-/* --- FIX CONTRASTE BOUTON ESPACE CVL --- */
+/* Contraste amélioré pour le bouton Espace CVL */
 .navbar .dropdown-toggle.btn-outline-light:hover,
 .navbar .dropdown-toggle.btn-outline-light:focus,
 .navbar .dropdown-toggle.show {
@@ -205,7 +228,7 @@ if ($nav_user_id) {
     color: #212529 !important;
 }
 
-/* --- ANIMATION DESKTOP (Version corrigée sans décalage) --- */
+/* --- AFFICHAGE DESKTOP (Largeur >= 992px) --- */
 @media (min-width: 992px) {
     .navbar .dropdown-menu {
         display: block;
@@ -219,7 +242,6 @@ if ($nav_user_id) {
         pointer-events: none;
     }
 
-    /* Quand le menu est ouvert */
     .navbar .dropdown-menu.show {
         opacity: 1;
         visibility: visible;
@@ -233,7 +255,7 @@ if ($nav_user_id) {
     }
 }
 
-/* --- OPTIMISATION & ANIMATION MOBILE (Largeur < 992px) --- */
+/* --- AFFICHAGE MOBILE (Largeur < 992px) --- */
 @media (max-width: 991.98px) {
     
     .navbar-nav {
@@ -243,6 +265,7 @@ if ($nav_user_id) {
         padding: 10px 0;
     }
 
+    /* Le nom d'utilisateur passe en haut sur mobile */
     .nav-item-user {
         order: -2; 
         width: 100%;
@@ -260,7 +283,7 @@ if ($nav_user_id) {
         text-align: center;
     }
 
-    /* MENU DÉROULANT MOBILE */
+    /* Animation Accordéon pour le Dropdown Mobile */
     .navbar .dropdown-menu {
         display: block !important;
         max-height: 0;
@@ -281,6 +304,7 @@ if ($nav_user_id) {
         padding: 10px 0;
     }
     
+    /* Adaptation des items pour le tactile */
     .dropdown-item {
         color: #fff !important;
         text-align: left;

@@ -1,17 +1,25 @@
 <?php
-// admin_reset.php
+/**
+ * Administration - Réinitialisation du Système (Factory Reset)
+ * admin_reset.php
+ * * Ce script critique permet de vider sélectivement ou totalement la base de données.
+ * Il est utilisé pour la maintenance annuelle ou le nettoyage des données de test.
+ *
+ * @warning ACTION IRRÉVERSIBLE.
+ */
+
 require_once 'auth_check.php';
 require_once 'db.php';
 
-// Vérification standard Admin
+// Vérification des droits d'administration
 checkAccess('admin');
 
-// --- SÉCURITÉ ULTIME ---
-// Seul l'utilisateur avec l'ID 2 (Théo/Super Admin) peut accéder à cette page.
-// Cela empêche un membre du CVL lambda de tout casser par erreur.
+// --- SÉCURITÉ CRITIQUE ---
+// Restriction d'accès : Seul le Super Administrateur (ID 2) est autorisé à accéder à cette page.
+// Cette mesure protège l'intégrité du système contre les erreurs de manipulation accidentelles.
 $current_id = $_SESSION['user_id'] ?? $_SESSION['id'] ?? 0;
 if ($current_id != 2) {
-    // Redirection silencieuse ou message d'erreur
+    // Redirection de sécurité
     header("Location: admin.php"); 
     exit; 
 }
@@ -36,7 +44,7 @@ $groups = [
         'icon' => 'fa-file-alt',
         'desc' => 'Vide l\'historique de sécurité.',
         'tables' => [
-            'audit_logs'          => 'Logs d\'audit (Actions admin/cvl)'
+            'audit_logs'          => 'Logs d\'audit (Actions système)'
         ]
     ],
     'system' => [
@@ -45,7 +53,7 @@ $groups = [
         'class' => 'text-danger',
         'desc' => '⚠️ DANGER : Supprime les classes, salles, bâtiments et produits. À utiliser uniquement pour une remise à zéro totale.',
         'tables' => [
-            'users'               => 'Utilisateurs (Voir option spécifique plus bas)', // Pour info dans la liste interne
+            'users'               => 'Utilisateurs (Voir option spécifique plus bas)', // Indicatif pour la liste interne
             'classes'             => 'Classes',
             'class_levels'        => 'Niveaux de classe',
             'rooms'               => 'Salles',
@@ -62,7 +70,7 @@ $groups = [
 $message = '';
 $message_type = '';
 
-// --- TRAITEMENT ---
+// --- TRAITEMENT DU FORMULAIRE ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     $tables_to_clean = $_POST['tables'] ?? [];
@@ -70,20 +78,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!empty($tables_to_clean) || $clean_users_only) {
         try {
-            // 1. Désactiver les clés étrangères pour permettre le TRUNCATE brutal
+            // 1. Désactivation des contraintes de clés étrangères pour permettre le vidage des tables (TRUNCATE)
             $pdo->exec("SET FOREIGN_KEY_CHECKS = 0"); 
 
             $count = 0;
 
-            // A. Traitement des tables classiques sélectionnées
+            // A. Nettoyage des tables standards sélectionnées
             foreach ($tables_to_clean as $table) {
-                // Sécurité : on vérifie que la table est bien dans notre liste autorisée
+                // Vérification de sécurité : la table doit être explicitement autorisée dans la configuration
                 $is_allowed = false;
                 foreach ($groups as $g) {
                     if (array_key_exists($table, $g['tables'])) $is_allowed = true;
                 }
 
-                // Cas particulier : on ne truncate pas 'users' ici si on a coché l'option spéciale élèves
+                // Exception : la table 'users' est gérée séparément si l'option spécifique est active
                 if ($table === 'users' && $clean_users_only) {
                     continue; 
                 }
@@ -94,36 +102,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
 
-            // B. Traitement Spécial : Nettoyage des Élèves (tout en gardant le CVL)
+            // B. Traitement spécifique : Suppression des comptes élèves (Conservation des administrateurs)
             if ($clean_users_only) {
-                // Logique : On supprime de la table 'users' tous les ID qui NE SONT PAS dans 'cvl_members'
-                // Et on protège l'ID 2 (Super Admin) par double sécurité.
+                // Suppression des utilisateurs ne figurant pas dans la liste des membres du CVL.
+                // Protection additionnelle du compte Super Admin (ID 2).
                 $sql = "DELETE FROM users 
                         WHERE user_id NOT IN (SELECT user_id FROM cvl_members) 
                         AND user_id != 2";
                 
-                $stmt = $pdo->exec($sql); // Retourne le nombre de lignes supprimées
-                // $count++; // On ne compte pas ça comme une "table truncatée" mais c'est une action faite.
+                $stmt = $pdo->exec($sql); // Exécution de la requête de suppression
+                // (Action non comptabilisée comme un truncate de table entière)
             }
 
-            // 2. Réactiver les clés étrangères
+            // 2. Réactivation des clés étrangères
             $pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
 
             $message = "<strong>Succès !</strong> La base de données a été nettoyée ($count tables réinitialisées).";
             $message_type = "success";
 
-            // Log de l'action dans audit_logs (si la table n'a pas été supprimée juste avant !)
+            // Enregistrement dans les logs (si la table d'audit n'a pas été vidée par l'action actuelle)
             if (!in_array('audit_logs', $tables_to_clean)) {
                 $details = "Tables: " . implode(', ', $tables_to_clean);
                 if ($clean_users_only) $details .= " + Users (Students only)";
                 
-                // Insertion manuelle rapide pour éviter les dépendances circulaires
+                // Insertion directe pour éviter les dépendances
                 $stmtLog = $pdo->prepare("INSERT INTO audit_logs (user_id, target_type, target_id, action, details, ip_address) VALUES (?, 'system', 0, 'DB_RESET', ?, ?)");
                 $stmtLog->execute([$current_id, $details, $_SERVER['REMOTE_ADDR']]);
             }
 
         } catch (PDOException $e) {
-            // En cas d'erreur, on tente de réactiver les FK quand même
+            // Tentative de réactivation des clés étrangères en cas d'échec critique
             try { $pdo->exec("SET FOREIGN_KEY_CHECKS = 1"); } catch(Exception $x) {}
             
             $message = "<strong>Erreur SQL :</strong> " . $e->getMessage();
@@ -239,7 +247,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             </div>
                             <div class="list-group">
                                 <?php foreach ($groups['system']['tables'] as $tbl => $lbl): ?>
-                                    <?php if ($tbl === 'users') continue; // On gère users via l'option spéciale au dessus ?>
+                                    <?php if ($tbl === 'users') continue; // La table 'users' est gérée via l'option dédiée ci-dessus ?>
                                     <label class="list-group-item d-flex justify-content-between align-items-center bg-light">
                                         <div>
                                             <input class="form-check-input me-2" type="checkbox" name="tables[]" value="<?php echo $tbl; ?>">

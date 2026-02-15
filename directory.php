@@ -1,18 +1,27 @@
 <?php
-// directory.php
+/**
+ * Annuaire Élèves & Localisation
+ * * Ce module permet aux membres du CVL de rechercher un élève pour :
+ * 1. Consulter sa classe et ses informations de base.
+ * 2. Visualiser son emploi du temps (Localisation pour la livraison).
+ * 3. Vérifier l'historique des roses reçues (Traçabilité).
+ *
+ * Supporte deux vues : Liste globale (recherche) et Vue par Classe (arborescence).
+ */
+
 require_once 'db.php';
 require_once 'auth_check.php';
 
-// On autorise CVL et ADMIN
+// Contrôle d'accès : Autorisé pour les membres CVL et les Administrateurs
 checkAccess('cvl');
 
 // =============================================================================
-// 1. PARTIE AJAX (Récupération des détails d'un élève)
+// 1. TRAITEMENT AJAX (Détails Élève pour Modale)
 // =============================================================================
 if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
     $studentId = intval($_POST['student_id']);
     
-    // A. Infos de l'élève
+    // A. Récupération des informations civiles et scolaires
     $stmt = $pdo->prepare("
         SELECT r.*, c.name as class_name 
         FROM recipients r 
@@ -23,20 +32,19 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
     $student = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$student) {
-        echo "<div class='alert alert-danger'>Élève introuvable.</div>";
+        echo "<div class='alert alert-danger'>Élève introuvable ou supprimé.</div>";
         exit;
     }
 
-    // --- B. Récupération de l'emploi du temps (IDs des salles) ---
+    // B. Récupération de l'emploi du temps (IDs des salles stockés en colonnes h08-h17)
     $stmtSched = $pdo->prepare("SELECT * FROM schedules WHERE recipient_id = ?");
     $stmtSched->execute([$studentId]);
     $schedule = $stmtSched->fetch(PDO::FETCH_ASSOC);
 
-    // --- C. (NOUVEAU) Création du dictionnaire des Salles (ID => Nom) ---
-    // On charge toutes les salles dans un tableau associatif pour traduire rapidement
+    // C. Construction du référentiel des salles (Optimisation)
+    // Charge toutes les salles en mémoire (ID => Nom) pour éviter des requêtes SQL dans la boucle d'affichage.
     $roomsMap = [];
     if ($schedule) {
-        // On récupère ID et NOM de toutes les salles
         $sqlRooms = "SELECT id, name FROM rooms";
         $stmtRooms = $pdo->query($sqlRooms);
         while ($row = $stmtRooms->fetch(PDO::FETCH_ASSOC)) {
@@ -44,7 +52,7 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
         }
     }
 
-    // D. Historique des cadeaux REÇUS
+    // D. Récupération de l'historique des commandes reçues (Logs logistiques)
     $sqlGifts = "
         SELECT 
             ort.id as gift_id,
@@ -64,7 +72,7 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
     $stmtGifts->execute([$studentId]);
     $gifts = $stmtGifts->fetchAll(PDO::FETCH_ASSOC);
 
-    // --- E. Génération du HTML pour la Modale ---
+    // --- E. Rendu du HTML (Fragment injecté dans la modale Bootstrap) ---
     ?>
     <div class="text-center mb-4">
         <h3 class="fw-bold text-primary mb-0"><?php echo htmlspecialchars($student['prenom'] . ' ' . $student['nom']); ?></h3>
@@ -88,11 +96,9 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
                         <?php 
                         $hours = ['h08', 'h09', 'h10', 'h11', 'h12', 'h13', 'h14', 'h15', 'h16', 'h17'];
                         foreach ($hours as $h): 
-                            // 1. On récupère l'ID de la salle dans l'emploi du temps
+                            // Résolution du nom de la salle
                             $roomId = $schedule[$h] ?? null;
                             
-                            // 2. On traduit l'ID en Nom grâce à notre tableau $roomsMap
-                            // Si l'ID existe dans la map, on affiche le nom, sinon un tiret
                             if ($roomId && isset($roomsMap[$roomId])) {
                                 $display = '<strong class="text-primary">' . htmlspecialchars($roomsMap[$roomId]) . '</strong>';
                             } else {
@@ -131,6 +137,7 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
                 <tbody>
                     <?php foreach ($gifts as $gift): ?>
                         <?php
+                            // Récupération des détails produits pour cette ligne de commande
                             $stmtRoses = $pdo->prepare("SELECT rr.quantity, rp.name FROM recipient_roses rr JOIN rose_products rp ON rr.rose_product_id = rp.id WHERE rr.recipient_id = ?");
                             $stmtRoses->execute([$gift['gift_id']]);
                             $rosesList = $stmtRoses->fetchAll(PDO::FETCH_ASSOC);
@@ -183,23 +190,23 @@ if (isset($_POST['ajax_get_details']) && isset($_POST['student_id'])) {
         </div>
     <?php endif; ?>
     <?php
-    exit; // Fin du traitement AJAX
+    exit; // Fin de la réponse AJAX
 }
 
 
 // =============================================================================
-// 2. LOGIQUE D'AFFICHAGE DE LA PAGE (RECHERCHE & VUES)
+// 2. LOGIQUE D'AFFICHAGE PRINCIPAL (VUES & RECHERCHE)
 // =============================================================================
 
-$view = $_GET['view'] ?? 'list'; // 'list' (élèves) ou 'classes' (par classe)
+$view = $_GET['view'] ?? 'list'; // Modes: 'list' (Tableau plat) ou 'classes' (Accordéon)
 $search = trim($_GET['q'] ?? '');
 
 $results = [];
 
-// --- REQUÊTES SQL ---
+// --- Construction des requêtes SQL selon la vue ---
 
 if ($view === 'classes') {
-    // VUE PAR CLASSE
+    // VUE HIERARCHIQUE : Liste des classes
     $sqlClasses = "SELECT * FROM classes WHERE 1=1 ";
     $paramsC = [];
     
@@ -215,7 +222,7 @@ if ($view === 'classes') {
     $classes = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
 } else {
-    // VUE LISTE (DÉFAUT)
+    // VUE LISTE : Recherche globale d'élèves
     $sql = "
         SELECT r.*, c.name as class_name, c.id as class_real_id
         FROM recipients r
@@ -236,7 +243,6 @@ if ($view === 'classes') {
         $params = [$term, $term, $term, "%$search%", $term];
     }
     
-    // Tri par Nom
     $sql .= " ORDER BY r.nom ASC";
 
     $stmt = $pdo->prepare($sql);
@@ -348,7 +354,7 @@ if ($view === 'classes') {
         <div class="accordion" id="accordionClasses">
             <?php foreach ($classes as $cls): ?>
                 <?php 
-                    // Récupération "lazy" des élèves de cette classe
+                    // Chargement dynamique des élèves pour chaque classe (Lazy loading simulé)
                     $stmtS = $pdo->prepare("SELECT * FROM recipients WHERE class_id = ? ORDER BY nom ASC");
                     $stmtS->execute([$cls['id']]);
                     $studentsInClass = $stmtS->fetchAll(PDO::FETCH_ASSOC);
@@ -416,12 +422,16 @@ if ($view === 'classes') {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+    /**
+     * Ouvre la modale et charge les détails de l'élève via AJAX.
+     * @param {number} id - L'identifiant de l'élève (recipient_id).
+     */
     function openStudentModal(id) {
-        // 1. Ouvrir la modale
+        // 1. Initialisation de la modale Bootstrap
         var myModal = new bootstrap.Modal(document.getElementById('studentModal'));
         myModal.show();
 
-        // 2. Afficher le loader (reset du contenu précédent)
+        // 2. Affichage du loader (Reset du contenu)
         const modalBody = document.getElementById('studentModalBody');
         modalBody.innerHTML = `
             <div class="text-center py-5">
@@ -429,8 +439,8 @@ if ($view === 'classes') {
                 <p class="mt-2 text-muted">Chargement...</p>
             </div>`;
 
-        // 3. Appel AJAX vers la même page
-        fetch('directory', { // Assure-toi que c'est bien directory.php ici
+        // 3. Appel AJAX pour récupérer le HTML généré par le serveur
+        fetch('directory', { 
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -442,7 +452,7 @@ if ($view === 'classes') {
             modalBody.innerHTML = html;
         })
         .catch(error => {
-            modalBody.innerHTML = '<div class="alert alert-danger">Erreur de chargement.</div>';
+            modalBody.innerHTML = '<div class="alert alert-danger">Erreur technique lors du chargement.</div>';
             console.error('Erreur:', error);
         });
     }

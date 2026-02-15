@@ -1,34 +1,61 @@
 <?php
+/**
+ * Administration - Gestion des Campagnes Emailing
+ * admin_emails.php
+ * * Ce script permet aux administrateurs d'envoyer des emails transactionnels ou informatifs en masse.
+ * Il gère trois types de campagnes :
+ * 1. Rappels de paiement (automatique pour les impayés).
+ * 2. Notifications post-événement (pour les roses non distribuées cause absence).
+ * 3. Messages personnalisés (ciblage par statut de commande).
+ *
+ * Utilise PHPMailer via la fonction helper getMailer().
+ */
+
 require 'db.php';
 require 'auth_check.php';
 require 'mail_config.php'; 
 
+// Vérification des droits d'administration
 checkAccess('admin');
 
 use PHPMailer\PHPMailer\Exception;
 
-// --- CONFIGURATION ---
-// METTRE SUR FALSE POUR ENVOYER RÉELLEMENT AUX ÉLÈVES
+// =================================================================
+// CONFIGURATION DU MODULE D'ENVOI
+// =================================================================
+
+/** * @var bool $TEST_MODE 
+ * Mode Sandbox : Si true, tous les emails sont détournés vers $TEST_EMAIL 
+ * pour éviter de spammer les utilisateurs réels pendant le développement.
+ */
 $TEST_MODE = false; 
-$TEST_EMAIL = 'theo.marescal@gmail.com'; 
+$TEST_EMAIL = 'admin@example.com'; // Adresse de réception en mode test
 
 $messageStr = "";
 $messageType = "";
-$errorLog = []; 
+$errorLog = []; // Pile pour stocker les erreurs d'envoi SMTP
+
+// =================================================================
+// TRAITEMENT DU FORMULAIRE (ENVOI)
+// =================================================================
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Extension du temps d'exécution PHP pour éviter les timeouts lors des envois en masse (+5 min)
     set_time_limit(300);
 
+    // Récupération des paramètres de campagne
     $mode = $_POST['mode']; // 'reminder', 'custom' ou 'absent_recipient'
     $customSubject = $_POST['subject'] ?? "Information CVL";
     $customBody = $_POST['custom_message'] ?? "";
     $targetFilter = $_POST['target_filter'] ?? 'all'; 
     
-    // 1. SÉLECTION ET PRÉPARATION DES DONNÉES
+    // --- 1. SÉLECTION ET PRÉPARATION DES DONNÉES ---
     $recipients = [];
 
     if ($mode === 'reminder') {
-        // --- MODE RAPPEL PAIEMENT ---
+        // [CAMPAGNE AUTOMATIQUE] RAPPEL DE PAIEMENT
+        // Cible : Utilisateurs ayant commandé mais n'ayant pas réglé (is_paid = 0).
+        // Donnée : Calcule la somme totale due par utilisateur.
         $sql = "SELECT u.email, u.nom, u.prenom, SUM(o.total_price) as total_due 
                 FROM orders o
                 JOIN users u ON o.user_id = u.user_id
@@ -40,8 +67,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $subject = "Rappel : Paiement de vos Roses 🌹"; 
 
     } elseif ($mode === 'absent_recipient') {
-        // --- MODE DESTINATAIRES ABSENTS ---
-        // On récupère les acheteurs dont les cadeaux n'ont PAS été distribués
+        // [CAMPAGNE AUTOMATIQUE] DESTINATAIRES ABSENTS
+        // Cible : Acheteurs dont les roses ont été payées mais non distribuées (is_distributed = 0).
+        // Objectif : Prévenir l'acheteur qu'il doit récupérer la fleur ou prévenir son destinataire.
+        
         $sql = "SELECT 
                     u.email, u.nom as buyer_nom, u.prenom as buyer_prenom,
                     r.nom as dest_nom, r.prenom as dest_prenom
@@ -54,11 +83,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         $rawResults = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
         
-        // REGROUPEMENT PHP : Un acheteur peut avoir plusieurs destinataires absents
-        // On transforme la liste brute en une liste unique par acheteur
+        // Logique de regroupement :
+        // Un acheteur peut avoir commandé pour plusieurs personnes absentes.
+        // Nous regroupons les destinataires par adresse email de l'acheteur pour n'envoyer qu'un seul mail.
         $groupedBuyers = [];
         foreach ($rawResults as $row) {
             $email = $row['email'];
+            
+            // Initialisation de l'acheteur s'il n'existe pas encore dans le tableau
             if (!isset($groupedBuyers[$email])) {
                 $groupedBuyers[$email] = [
                     'email' => $email,
@@ -67,19 +99,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'absent_names' => []
                 ];
             }
-            // On ajoute le nom du destinataire (en évitant les doublons si plusieurs roses pour la même personne)
+            
+            // Ajout du destinataire à la liste (Dédoublonnage simple)
             $destFullName = $row['dest_prenom'] . ' ' . $row['dest_nom'];
             if (!in_array($destFullName, $groupedBuyers[$email]['absent_names'])) {
                 $groupedBuyers[$email]['absent_names'][] = $destFullName;
             }
         }
         
-        $recipients = array_values($groupedBuyers); // On remet en tableau indexé pour la boucle d'envoi
+        // Conversion en tableau indexé pour l'itération
+        $recipients = array_values($groupedBuyers);
         $subject = "Information : Vos roses non distribuées 🌹";
 
     } else {
-        // --- MODE PERSONNALISÉ ---
+        // [CAMPAGNE MANUELLE] MESSAGE PERSONNALISÉ
+        // Cible : Définie par le filtre (Payé, Impayé, Non Distribué, ou Tous).
+        
         if ($targetFilter === 'undistributed') {
+            // Filtre spécifique : Payé mais non distribué
             $sql = "SELECT DISTINCT u.email, u.nom, u.prenom 
                     FROM orders o
                     JOIN users u ON o.user_id = u.user_id
@@ -87,18 +124,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     WHERE o.is_paid = 1 AND ort.is_distributed = 0
                     GROUP BY u.user_id";
         } else {
+            // Filtres standards basés sur le statut de paiement
             $sql = "SELECT DISTINCT u.email, u.nom, u.prenom 
                     FROM orders o
                     JOIN users u ON o.user_id = u.user_id";
+            
             if ($targetFilter === 'paid') $sql .= " WHERE o.is_paid = 1";
             elseif ($targetFilter === 'unpaid') $sql .= " WHERE o.is_paid = 0";
+            
             $sql .= " GROUP BY u.user_id";
         }
+        
         $recipients = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
         $subject = $customSubject;
     }
 
-    // 2. ENVOI
+    // --- 2. BOUCLE D'ENVOI ---
     $countSent = 0;
     $mail = getMailer(); 
 
@@ -107,15 +148,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $nom = htmlspecialchars($row['nom']);
         $emailUser = $row['email'];
 
+        // Validation basique de l'email
         if (empty($emailUser)) {
             $errorLog[] = "Introuvable : Pas d'adresse email pour <strong>$nom $prenom</strong>.";
             continue;
         }
 
-        // --- CONSTRUCTION DU CONTENU ---
+        // --- CONSTRUCTION DU CORPS DU MESSAGE ---
         $innerContent = "";
         
         if ($mode === 'reminder') {
+            // Template : Rappel de paiement
             $amount = number_format($row['total_due'], 2);
             $innerContent = "
                 <p>Bonjour <strong>$prenom</strong>,</p>
@@ -128,7 +171,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ";
 
         } elseif ($mode === 'absent_recipient') {
-            // Liste des absents pour cet acheteur (ex: "Tom Marescal et Marie Dupont")
+            // Template : Destinataire Absent
+            // Formatage de la liste des noms (ex: "Tom et Léa")
             $namesList = implode(', ', $row['absent_names']);
             $lastIndex = strrpos($namesList, ', ');
             if ($lastIndex !== false) {
@@ -137,7 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $innerContent = "
                 <p>Bonjour <strong>$prenom</strong>,</p>
-                <p>Nous n'avons pas pu distribuer vos roses à <strong>$namesList</strong> car cette/ces personne(s) étai(en)t absente(s) lors de notre passage.</p>
+                <p>Nous n'avons pas pu distribuer vos roses à <strong>$namesList</strong> car ces personnes étaient absentes (ou introuvables) lors de notre passage.</p>
                 
                 <div style='background-color: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #ffc107;'>
                     <h3 style='margin: 0; color: #856404; font-size: 1.1em;'>📍 Comment récupérer les fleurs ?</h3>
@@ -154,7 +198,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ";
 
         } else {
-            // Mode Personnalisé
+            // Template : Message Personnalisé (Texte brut converti en HTML)
             $formattedBody = nl2br(htmlspecialchars($customBody));
             $innerContent = "
                 <p>Bonjour <strong>$prenom</strong>,</p>
@@ -164,7 +208,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ";
         }
 
-        // --- TEMPLATE GLOBAL ---
+        // --- WRAPPER HTML GLOBAL (Design System) ---
         $emailHtml = "
         <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px; background-color: #ffffff;'>
             <div style='background-color: #d63384; padding: 20px; text-align: center; color: white; border-radius: 8px 8px 0 0;'>
@@ -180,9 +224,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         </div>";
 
-        // --- ENVOI ---
+        // --- ENVOI VIA SMTP ---
         try {
             $mail->clearAddresses();
+            // Bascule vers l'email de test si le mode DEV est actif
             $destinataire = $TEST_MODE ? $TEST_EMAIL : $emailUser;
             
             $mail->addAddress($destinataire);
@@ -193,15 +238,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $mail->send();
             $countSent++;
 
+            // Throttling (Anti-spam) : Pause d'une seconde tous les 10 mails
+            // Permet de ne pas saturer le serveur SMTP et d'éviter le blacklistage.
             if ($countSent % 10 == 0) { sleep(1); }
 
         } catch (Exception $e) {
+            // Log de l'erreur sans arrêter le script pour les autres destinataires
             $errorLog[] = "Échec pour <strong>$nom $prenom</strong> ($emailUser) : " . $mail->ErrorInfo;
+            
+            // Réinitialisation de l'objet Mailer en cas de crash critique
             try { $mail = getMailer(); } catch (Exception $ex) {}
         }
     }
     
-    // Message de confirmation
+    // --- FEEDBACK UTILISATEUR ---
+    // Construction du message de confirmation en fonction du contexte
     $targetName = "personnes";
     if ($mode === 'reminder') $targetName = "élèves en attente de paiement";
     elseif ($mode === 'absent_recipient') $targetName = "acheteurs avec destinataires absents";
@@ -211,7 +262,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!empty($errorLog)) {
         $messageType = "warning";
-        $messageStr = "Terminé avec erreurs. $countSent envoyés sur " . count($recipients) . ".";
+        $messageStr = "Envoi terminé avec des erreurs. $countSent emails envoyés sur " . count($recipients) . ".";
     } else {
         $messageType = "success";
         $messageStr = "$countSent emails envoyés avec succès ($targetName).";
@@ -339,18 +390,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </div>
 
 <script>
+    /**
+     * Gère l'affichage dynamique des formulaires selon le mode choisi.
+     */
     function toggleForm() {
         const mode = document.querySelector('input[name="mode"]:checked').value;
         
-        // Gestion des affichages
+        // Affichage des boîtes d'information contextuelles
         document.getElementById('reminderInfo').style.display = (mode === 'reminder') ? 'block' : 'none';
         document.getElementById('absentInfo').style.display = (mode === 'absent_recipient') ? 'block' : 'none';
         
-        // Le formulaire perso ne s'affiche que si on est en mode "custom"
+        // Le formulaire personnalisé (Objet/Message/Filtre) n'est visible qu'en mode 'custom'
         document.getElementById('customFields').style.display = (mode === 'custom') ? 'block' : 'none';
     }
     
-    // Init au chargement
+    // Initialisation au chargement de la page
     toggleForm();
 </script>
 

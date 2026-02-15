@@ -1,24 +1,40 @@
 <?php
-// index.php
+/**
+ * Tableau de Bord Élève (Page d'Accueil Connectée)
+ * index.php
+ * * Cette page constitue l'interface principale pour les utilisateurs standards (élèves).
+ * Elle permet de :
+ * 1. Visualiser l'historique des commandes passées.
+ * 2. Suivre l'état d'avancement de chaque commande (Paiement, Préparation, Livraison).
+ * 3. Accéder au formulaire de nouvelle commande si les ventes sont ouvertes.
+ */
+
+// Initialisation de session et inclusion des dépendances
 session_start();
 require_once 'db.php';
 require_once 'auth_check.php'; 
 
-// --- VERIFICATION AUTH ---
+// --- 1. CONTRÔLE D'AUTHENTIFICATION (SSO) ---
 $is_logged_in = false;
 $user_info = null;
 
 if (isset($_COOKIE['jwt'])) {
     $is_logged_in = true;
+    // Récupération des informations utilisateur depuis la base locale pour l'affichage
     $stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
     $stmt->execute([$current_user_id]);
     $user_info = $stmt->fetch();
 } else {
+    // Redirection vers la page d'accueil publique si non connecté
     header("Location: welcome.php");
     exit;
 }
 
-// --- RECUPERATION DES COMMANDES ---
+// --- 2. RÉCUPÉRATION DES DONNÉES MÉTIER ---
+
+// Récupération des commandes de l'utilisateur avec agrégation des statuts
+// On compte le nombre total de destinataires et le nombre de produits préparés/livrés
+// pour calculer un statut global "Macro" par commande.
 $sql = "
     SELECT 
         o.*, 
@@ -35,7 +51,7 @@ $stmt = $pdo->prepare($sql);
 $stmt->execute([$current_user_id]);
 $orders = $stmt->fetchAll();
 
-// Vérification de l'ouverture des ventes
+// Vérification de l'état global de la boutique (Ouvert/Fermé)
 $stmt = $pdo->prepare("SELECT setting_value FROM global_settings WHERE setting_key = 'sales_open'");
 $stmt->execute();
 $isSalesOpen = $stmt->fetchColumn() == '1';
@@ -52,6 +68,7 @@ $isSalesOpen = $stmt->fetchColumn() == '1';
 <?php include 'navbar.php'; ?>
 
 <div class="container py-5">
+    
     <div class="row mb-4 align-items-center">
         <div class="col-md-8">
             <h1 class="display-6 fw-bold text-danger">
@@ -89,6 +106,7 @@ $isSalesOpen = $stmt->fetchColumn() == '1';
                 
             </div>
         </div>
+    
     <?php else: ?>
         <div class="card shadow-sm border-0 overflow-hidden" style="border-radius: 15px;">
             <div class="table-responsive">
@@ -106,7 +124,8 @@ $isSalesOpen = $stmt->fetchColumn() == '1';
                     <tbody>
                         <?php foreach ($orders as $order): ?>
                             <?php
-                                // Calcul du statut global pour le tableau
+                                // Logique d'affichage du badge de statut global
+                                // Priorité : Impayé > Livré > En cours > Préparé > Validé
                                 $statusBadge = '';
                                 if (!$order['is_paid']) {
                                     $statusBadge = '<span class="badge bg-warning text-dark"><i class="fas fa-clock"></i> En attente paiement</span>';
@@ -165,7 +184,7 @@ $isSalesOpen = $stmt->fetchColumn() == '1';
 
 <script>
 /**
- * Formate une date string en "14/02/2024 à 10:30" (Format long)
+ * Utilitaires de formatage de date pour l'affichage localisé (FR).
  */
 function formatDateFR(dateString) {
     if (!dateString) return '--';
@@ -180,9 +199,6 @@ function formatDateFR(dateString) {
     });
 }
 
-/**
- * Formate en "14/02 10:30" (Format court pour la Timeline)
- */
 function formatDateTimeShort(dateString) {
     if (!dateString) return '';
     const date = new Date(dateString);
@@ -191,14 +207,19 @@ function formatDateTimeShort(dateString) {
            date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
 
+/**
+ * Charge et affiche les détails d'une commande via l'API interne.
+ * @param {number} orderId - L'ID de la commande à consulter.
+ */
 function showOrderDetails(orderId) {
     const modalContent = document.getElementById('modal-order-content');
     const modalOrderId = document.getElementById('modal-order-id');
     
+    // Reset de l'état de chargement
     modalOrderId.innerText = String(orderId).padStart(4, '0');
     modalContent.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-danger" role="status"></div><br><span class="text-muted mt-2 d-block">Chargement des informations...</span></div>';
     
-    // Ouverture Modale Bootstrap
+    // Ouverture explicite de la modale Bootstrap
     const modalElement = document.getElementById('orderDetailsModal');
     if (modalElement) {
         let modalInstance = bootstrap.Modal.getInstance(modalElement);
@@ -210,7 +231,7 @@ function showOrderDetails(orderId) {
         }
     }
 
-    // Appel API
+    // Appel API (Note : s'assurer que l'endpoint api/get_order_details existe)
     fetch(`api/get_order_details?id=${orderId}`)
     .then(response => {
         if (!response.ok) { throw new Error("Erreur HTTP " + response.status); }
@@ -222,7 +243,7 @@ function showOrderDetails(orderId) {
             return;
         }
 
-        // --- EN-TÊTE ---
+        // --- Construction du HTML de la modale ---
         const isPaid = (data.order.is_paid == 1);
         const labelTotal = isPaid ? "Total Payé" : "Total à Payer";
         const colorTotal = isPaid ? "text-success" : "text-danger";
@@ -243,28 +264,25 @@ function showOrderDetails(orderId) {
             <div class="d-flex flex-column gap-3">
         `;
 
-        // --- BOUCLE DESTINATAIRES ---
+        // Itération sur chaque destinataire de la commande
         data.recipients.forEach(dest => {
             
-            // --- GESTION LOGIQUE TIMELINE ---
-            
-            // 1. COMMANDE
+            // Calcul de l'avancement pour la Timeline (Stepper)
+            // État 1: Commande créée
             const step1Class = "completed";
             const timeOrdered = formatDateTimeShort(data.order.created_at);
 
-            // 2. PAIEMENT
+            // État 2: Paiement
             const step2Class = isPaid ? "completed" : "";
-            // Si payé mais pas de date, on met "Validé" par défaut
             const timePaid = (isPaid && data.order.paid_at) ? formatDateTimeShort(data.order.paid_at) : (isPaid ? "Validé" : "");
 
-            // 3. PRÉPARATION
+            // État 3: Préparation Logistique
             const isPrepared = (dest.is_prepared == 1);
             let step3Class = "";
             let timePrepared = "";
 
             if (isPrepared) {
                 step3Class = "completed";
-                // Si la date existe on la formate, sinon on met "Validé"
                 if (dest.prepared_at) {
                     timePrepared = formatDateTimeShort(dest.prepared_at);
                 } else {
@@ -272,18 +290,17 @@ function showOrderDetails(orderId) {
                 }
             }
 
-            // 4. DISTRIBUTION
+            // État 4: Distribution Finale
             const isDistributed = (dest.is_distributed == 1);
             let step4Class = "";
             let timeDistributed = "";
 
             if (isDistributed) {
                 step4Class = "completed";
-                // Si distribué, c'est forcément préparé visuellement
+                // Rétro-validation visuelle : Si livré, alors c'est forcément préparé
                 step3Class = "completed"; 
-                if (timePrepared === "") timePrepared = "Validé"; // Fallback visuel si étape 3 sautée
+                if (timePrepared === "") timePrepared = "Validé"; 
 
-                // Si la date existe on la formate, sinon on met "Validé"
                 if (dest.distributed_at) {
                     timeDistributed = formatDateTimeShort(dest.distributed_at);
                 } else {
@@ -291,14 +308,13 @@ function showOrderDetails(orderId) {
                 }
             }
 
-            // --- FIN LOGIQUE TIMELINE ---
-
-            // Roses Badges
+            // Génération des badges de produits (Roses)
             let rosesHtml = dest.roses.map(r => {
                 let nameLower = r.name.toLowerCase();
                 let badgeClass = "bg-secondary text-white"; 
                 let emoji = "🌹";
                 
+                // Code couleur selon le type de rose
                 if (nameLower.includes('rouge')) { badgeClass = "badge-rose-rouge"; emoji = "🌹"; }
                 else if (nameLower.includes('blanche')) { badgeClass = "badge-rose-blanche"; emoji = "🤍"; }
                 else if (nameLower.includes('rose')) { badgeClass = "badge-rose-pink"; emoji = "🌸"; }
@@ -309,12 +325,12 @@ function showOrderDetails(orderId) {
                         </span>`;
             }).join('');
 
-            // Data Adaptation
+            // Données d'identité
             let fullName = `${dest.prenom} ${dest.nom}`;
             let className = dest.class_name ? dest.class_name : "Classe inconnue";
             let anonBadge = dest.is_anonymous == 1 ? '<span class="badge bg-dark ms-2"><i class="fas fa-user-secret"></i> Anonyme</span>' : '';
 
-            // HTML de la timeline
+            // Structure HTML de la Timeline verticale
             let timelineHtml = `
                 <div class="stepper-wrapper">
                     <div class="stepper-item ${step1Class}">
@@ -336,6 +352,7 @@ function showOrderDetails(orderId) {
                 </div>
             `;
 
+            // Assemblage de la carte destinataire
             html += `
                 <div class="card border-0 shadow-sm bg-white rounded-3">
                     <div class="card-body">
