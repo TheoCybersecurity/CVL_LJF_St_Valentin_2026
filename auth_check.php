@@ -138,4 +138,8 @@ function checkAccess($requiredRole = 'cvl') {
     }
     return $userRole; 
 }
+
+require_once '/var/www/html/shared/php/log_access.php';
+logAccess($current_user_id);
+
 ?>
