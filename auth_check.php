@@ -43,8 +43,15 @@ if (!isset($_COOKIE['jwt'])) {
 try {
     $decoded = JWT::decode($_COOKIE['jwt'], new Key(JWT_SECRET, 'HS256'));
     $username_from_jwt = $decoded->user->name;
+} catch (\Firebase\JWT\ExpiredException $e) {
+    require_once '/var/www/html/shared/php/auto_refresh.php';
+    if (!tryRefreshToken()) {
+        triggerLogoutAndExit();
+    }
+    $decoded = JWT::decode($_COOKIE['jwt'], new Key(JWT_SECRET, 'HS256'));
+    $username_from_jwt = $decoded->user->name;
 } catch (Exception $e) {
-    triggerLogoutAndExit(); // Jeton invalide ou expiré
+    triggerLogoutAndExit();
 }
 
 // --- 2. Vérification des droits sur la Base Centrale (SSO) ---
