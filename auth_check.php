@@ -37,7 +37,10 @@ function triggerLogoutAndExit() {
 
 // --- 1. Validation du Jeton d'Authentification (JWT) ---
 if (!isset($_COOKIE['jwt'])) {
-    triggerLogoutAndExit(); // Absence de jeton : Redirection immédiate
+    require_once '/var/www/html/shared/php/auto_refresh.php';
+    if (!tryRefreshToken()) {
+        triggerLogoutAndExit();
+    }
 }
 
 try {
