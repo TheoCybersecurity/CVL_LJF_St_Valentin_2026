@@ -57,34 +57,26 @@ try {
     triggerLogoutAndExit();
 }
 
-// --- 2. Vérification des droits sur la Base Centrale (SSO) ---
-$conn_projets = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-if ($conn_projets->connect_error) die("Erreur de connexion à la base centrale.");
+// --- 2. Vérification des droits via l'API interne (SSO) ---
+// Remplace la connexion directe à la base centrale — voir
+// shared/php/auth_api_client.php.
+require_once '/var/www/html/shared/php/auth_api_client.php';
+$access_col = ACCESS_COLUMN;
+$row = authCheckAccess($username_from_jwt, authCurrentLogContext());
 
-$access_col = ACCESS_COLUMN; 
-$stmt = $conn_projets->prepare("SELECT id, $access_col FROM users WHERE user = ?");
-$stmt->bind_param("s", $username_from_jwt);
-$stmt->execute();
-$result = $stmt->get_result();
-
-if ($row = $result->fetch_assoc()) {
-    // Vérification de l'indicateur d'accès spécifique à ce projet
-    if ($row[$access_col] != 1) {
-        http_response_code(403);
-        include('/var/www/html/common_errors/error403.php');
-        exit;
-    }
-    // Récupération de l'ID Global unique
-    $current_user_id = $row['id'];
-    $_SESSION['user_id'] = $current_user_id; 
-    
-} else {
-    $stmt->close();
-    $conn_projets->close();
+if (!$row) {
     triggerLogoutAndExit(); // Utilisateur introuvable dans le référentiel central
 }
-$stmt->close();
-$conn_projets->close();
+
+// Vérification de l'indicateur d'accès spécifique à ce projet
+if ((int)($row['permissions'][$access_col] ?? 0) !== 1) {
+    http_response_code(403);
+    include('/var/www/html/common_errors/error403.php');
+    exit;
+}
+// Récupération de l'ID Global unique
+$current_user_id = $row['id'];
+$_SESSION['user_id'] = $current_user_id;
 
 // --- 3. Synchronisation avec la Base de Données Locale ---
 try {
@@ -149,7 +141,7 @@ function checkAccess($requiredRole = 'cvl') {
     return $userRole; 
 }
 
-require_once '/var/www/html/shared/php/log_access.php';
-logAccess($current_user_id);
+// Journalisation d'accès désormais faite en un seul aller-retour par
+// authCheckAccess() ci-dessus (voir shared/php/auth_api_client.php).
 
 ?>
